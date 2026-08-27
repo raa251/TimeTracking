@@ -1,0 +1,5 @@
+# TimeTracker – Laufzeitabhängigkeiten
+# Standardbibliothek deckt den Rest ab (ctypes, sqlite3, tkinter, winreg).
+
+pystray>=0.19
+Pillow>=10.0
