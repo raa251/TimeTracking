@@ -11,6 +11,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -34,9 +35,28 @@ def regenerate_icon() -> None:
     print(f"Icon erzeugt: {ICON}")
 
 
+def stop_running_instances() -> None:
+    """Laufende TimeTracker.exe beenden – sonst ist dist\\TimeTracker.exe gesperrt."""
+    subprocess.run(["taskkill", "/F", "/IM", "TimeTracker.exe", "/T"],
+                   capture_output=True, text=True)
+
+
 def build(onedir: bool) -> None:
+    stop_running_instances()
     for folder in ("build", "dist"):
-        shutil.rmtree(ROOT / folder, ignore_errors=True)
+        for attempt in range(5):
+            try:
+                shutil.rmtree(ROOT / folder)
+                break
+            except FileNotFoundError:
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise SystemExit(
+                        f"'{folder}\\' ist gesperrt – läuft TimeTracker.exe noch? "
+                        "Bitte über das Tray-Menü beenden und erneut bauen."
+                    )
+                time.sleep(1)
     (ROOT / "TimeTracker.spec").unlink(missing_ok=True)
 
     args = [

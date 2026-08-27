@@ -12,32 +12,14 @@ from tkinter import filedialog, messagebox
 import tkinter as tk
 from tkinter import ttk
 
-from . import reporting
+from . import reporting, theme
 from .config import EXPORT_DIR, DATA_DIR, Config
 from .database import Database
 from .reporting import fmt_duration
 
 log = logging.getLogger(__name__)
 
-# Farben pro Kategorie (für Balken & Tabellen-Markierung)
-CATEGORY_COLORS = {
-    "Entwicklung": "#2563eb",
-    "Browser / Recherche": "#0891b2",
-    "Kommunikation": "#7c3aed",
-    "Office / Dokumente": "#16a34a",
-    "Design / Kreativ": "#db2777",
-    "Medien": "#ea580c",
-    "Gaming": "#dc2626",
-    "System / Datei": "#64748b",
-    "Sonstiges": "#94a3b8",
-    "Abwesenheit": "#cbd5e1",
-    "Privat": "#334155",
-}
 WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
-
-
-def _cat_color(name: str) -> str:
-    return CATEGORY_COLORS.get(name, "#94a3b8")
 
 
 class Dashboard:
@@ -54,12 +36,12 @@ class Dashboard:
 
         self.range_days = reporting.last_n_days(7)
         self.selection = tk.StringVar(value="week")
+        self.log_filter = tk.StringVar(value="alle")
+        self._style = ttk.Style(self.root)
+        self._nb_tab = 0
+        self._settings_win = None
 
-        self._build_style()
-        self._build_toolbar()
-        self._build_cards()
-        self._build_notebook()
-        self._build_statusbar()
+        self._build_all()
 
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self._refresh()
@@ -67,21 +49,46 @@ class Dashboard:
         self._watch_shutdown()
 
     # -- Aufbau ---------------------------------------------------------
-    def _build_style(self) -> None:
-        import tkinter.font as tkfont
+    def _build_all(self) -> None:
+        self.mode = theme.resolve(self.config.get("theme", "system"))
+        self.pal = theme.apply(self._style, self.root, self.mode)
+        self.cat_colors = theme.category_colors(self.mode)
+        theme.set_titlebar(self.root, self.mode)
+        self._build_toolbar()
+        self._build_cards()
+        self._build_notebook()
+        self._build_statusbar()
 
-        style = ttk.Style(self.root)
-        for theme in ("vista", "winnative", "clam"):
-            if theme in style.theme_names():
-                style.theme_use(theme)
-                break
-        row_h = tkfont.Font(family="Segoe UI", size=9).metrics("linespace") + 10
-        style.configure("Card.TFrame", background="#ffffff", relief="solid", borderwidth=1)
-        style.configure("CardValue.TLabel", font=("Segoe UI Semibold", 13), background="#ffffff")
-        style.configure("CardCaption.TLabel", font=("Segoe UI", 8), foreground="#64748b", background="#ffffff")
-        style.configure("Treeview", rowheight=row_h, font=("Segoe UI", 9))
-        style.configure("Treeview.Heading", font=("Segoe UI Semibold", 9))
-        style.configure("TNotebook.Tab", padding=(14, 6))
+    def _rebuild(self) -> None:
+        """Kompletter Neuaufbau der Oberfläche (z. B. nach Theme-Wechsel)."""
+        try:
+            self._nb_tab = self._nb.index(self._nb.select())
+        except Exception:  # noqa: BLE001
+            pass
+        for widget in list(self.root.winfo_children()):
+            if widget is self._settings_win:
+                continue
+            widget.destroy()
+        self._build_all()
+        try:
+            self._nb.select(self._nb_tab)
+        except Exception:  # noqa: BLE001
+            pass
+        # native Titelleiste live neu einfärben
+        try:
+            self.root.withdraw()
+            self.root.deiconify()
+        except tk.TclError:
+            pass
+        self._refresh()
+
+    def _cat_color(self, name: str) -> str:
+        return self.cat_colors.get(name, self.pal["text_muted"])
+
+    def _toggle_theme(self) -> None:
+        self.config.data["theme"] = "dark" if self.mode == "light" else "light"
+        self.config.save()
+        self._rebuild()
 
     def _build_toolbar(self) -> None:
         bar = ttk.Frame(self.root, padding=(10, 8))
@@ -97,17 +104,24 @@ class Dashboard:
             self._period_values.append(day)
 
         self.period_box = ttk.Combobox(
-            bar, values=self._period_labels, state="readonly", width=22,
+            bar, values=self._period_labels, state="readonly", width=20,
             font=("Segoe UI", 9),
         )
-        self.period_box.current(0)
+        try:
+            self.period_box.current(self._period_values.index(self.selection.get()))
+        except ValueError:
+            self.period_box.current(0)
         self.period_box.bind("<<ComboboxSelected>>", self._on_period_change)
         self.period_box.pack(side="left")
+        ttk.Button(bar, text="Aktualisieren", command=self._refresh).pack(side="left", padx=8)
 
-        ttk.Button(bar, text="Ordner", width=8, command=self._open_folder).pack(side="right")
-        ttk.Button(bar, text="Export JSON", command=lambda: self._export("json")).pack(side="right", padx=4)
-        ttk.Button(bar, text="Export CSV", command=lambda: self._export("csv")).pack(side="right")
-        ttk.Button(bar, text="Aktualisieren", command=self._refresh).pack(side="right", padx=8)
+        ttk.Button(bar, text="Einstellungen", command=self.open_settings).pack(side="right")
+        ttk.Button(bar, text=("Dunkelmodus" if self.mode == "light" else "Hellmodus"),
+                   command=self._toggle_theme).pack(side="right", padx=8)
+        ttk.Button(bar, text="Ordner", width=8, command=self._open_folder).pack(side="right", padx=(0, 8))
+        ttk.Button(bar, text="JSON", width=6, command=lambda: self._export("json")).pack(side="right", padx=(0, 4))
+        ttk.Button(bar, text="CSV", width=6, command=lambda: self._export("csv")).pack(side="right", padx=(0, 4))
+        ttk.Label(bar, text="Export:").pack(side="right", padx=(8, 4))
 
     def _on_period_change(self, _event=None) -> None:
         idx = self.period_box.current()
@@ -139,12 +153,13 @@ class Dashboard:
     def _build_notebook(self) -> None:
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=10, pady=(4, 6))
+        self._nb = nb
 
         # -- Tab: Übersicht -------------------------------------------
         tab_overview = ttk.Frame(nb, padding=8)
         nb.add(tab_overview, text="  Übersicht  ")
-        self.chart = tk.Canvas(tab_overview, height=270, bg="#ffffff", highlightthickness=1,
-                               highlightbackground="#e2e8f0")
+        self.chart = tk.Canvas(tab_overview, height=270, bg=self.pal["chart_bg"],
+                               highlightthickness=1, highlightbackground=self.pal["border"])
         self.chart.pack(fill="x")
         self.chart.bind("<Configure>", lambda e: self._draw_chart())
         cat_wrap = ttk.LabelFrame(tab_overview, text="Kategorien  ·  Verteilung der aktiven Zeit", padding=6)
@@ -161,7 +176,6 @@ class Dashboard:
         # -- Tab: Verlauf -----------------------------------------
         tab_log = ttk.Frame(nb, padding=8)
         nb.add(tab_log, text="  Verlauf (Log)  ")
-        self.log_filter = tk.StringVar(value="alle")
         fbar = ttk.Frame(tab_log)
         fbar.pack(fill="x", pady=(0, 4))
         ttk.Label(fbar, text="Anzeigen:").pack(side="left")
@@ -181,13 +195,13 @@ class Dashboard:
 
     def _build_statusbar(self) -> None:
         self.status = ttk.Label(self.root, text="", anchor="w", padding=(10, 3),
-                                font=("Segoe UI", 8), foreground="#64748b")
+                                style="Status.TLabel")
         self.status.pack(fill="x")
 
     def _make_tree(self, parent, columns, widths, stretch_col: str | None = None) -> ttk.Treeview:
         wrap = ttk.Frame(parent)
         wrap.pack(fill="both", expand=True)
-        tree = ttk.Treeview(wrap, columns=columns, show="headings", selectmode="browse")
+        tree = ttk.Treeview(wrap, columns=columns, show="headings", selectmode="extended")
         vsb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
         for col, width in zip(columns, widths):
@@ -198,8 +212,60 @@ class Dashboard:
                         stretch=(col == stretch_col))
         tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
-        tree._sort_state = {}  # type: ignore[attr-defined]
+        tree._sort_state = {}   # type: ignore[attr-defined]
+        tree._full_rows = {}    # type: ignore[attr-defined]  Item -> volle Werte (z. B. ganzer Titel)
+        tree._columns = tuple(columns)  # type: ignore[attr-defined]
+        self._install_copy(tree)
         return tree
+
+    def _install_copy(self, tree: ttk.Treeview) -> None:
+        """Strg+C / Rechtsklick → markierte Zeilen als Tabulator-Text in die Zwischenablage."""
+        def as_text(items, with_header: bool) -> str:
+            cols = tree._columns  # type: ignore[attr-defined]
+            lines = ["\t".join(cols)] if with_header else []
+            for it in items:
+                full = tree._full_rows.get(it)  # type: ignore[attr-defined]
+                vals = full if full else [str(v) for v in tree.item(it, "values")]
+                lines.append("\t".join("" if v is None else str(v) for v in vals))
+            return "\n".join(lines)
+
+        def copy(which: str = "sel"):
+            items = tree.get_children("") if which == "all" else tree.selection()
+            if not items:
+                return "break"
+            text = as_text(items, with_header=(which == "all" or len(items) > 1))
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update_idletasks()
+            status = getattr(self, "status", None)
+            if status is not None:
+                status.configure(text=f"{len(items)} Zeile(n) in die Zwischenablage kopiert.")
+            return "break"
+
+        def select_all(_event=None):
+            tree.selection_set(tree.get_children(""))
+            return "break"
+
+        tree._copy = copy  # type: ignore[attr-defined]
+        tree.bind("<Control-c>", lambda e: copy("sel"))
+        tree.bind("<Control-C>", lambda e: copy("sel"))
+        tree.bind("<Control-Insert>", lambda e: copy("sel"))
+        tree.bind("<Control-a>", select_all)
+        tree.bind("<Control-A>", select_all)
+
+        menu = tk.Menu(tree, tearoff=False, bg=self.pal["surface"], fg=self.pal["text"],
+                       activebackground=self.pal["sel_bg"], activeforeground=self.pal["sel_fg"])
+        menu.add_command(label="Auswahl kopieren\tStrg+C", command=lambda: copy("sel"))
+        menu.add_command(label="Ganze Tabelle kopieren", command=lambda: copy("all"))
+
+        def popup(event):
+            row = tree.identify_row(event.y)
+            if row and row not in tree.selection():
+                tree.selection_set(row)
+            if tree.selection():
+                menu.tk_popup(event.x_root, event.y_root)
+
+        tree.bind("<Button-3>", popup)
 
     # -- Daten laden & darstellen ------------------------------------
     def _current_segments(self):
@@ -256,7 +322,7 @@ class Dashboard:
                 values=(row["label"], fmt_duration(row["seconds"], short=True), f"{row['pct']:.1f}%"),
                 tags=(row["label"],),
             )
-            self.cat_tree.tag_configure(row["label"], foreground=_cat_color(row["label"]))
+            self.cat_tree.tag_configure(row["label"], foreground=self._cat_color(row["label"]))
         # Produktivität als zusätzliche Zeilen
         prod = s.get("productivity", {})
         if any(prod.values()):
@@ -281,19 +347,24 @@ class Dashboard:
                 values=(row["label"], cat, fmt_duration(row["seconds"], short=True), f"{row['pct']:.1f}%"),
                 tags=(cat,),
             )
-            self.app_tree.tag_configure(cat, foreground=_cat_color(cat))
+            self.app_tree.tag_configure(cat, foreground=self._cat_color(cat))
 
     def _fill_log(self, segments) -> None:
         self._reset_tree(self.log_tree)
         states = ("active",) if self.log_filter.get() == "nur aktiv" else ("active", "idle", "locked")
         for e in reporting.timeline(segments, include_states=states):
-            self.log_tree.insert(
+            item = self.log_tree.insert(
                 "", "end",
                 values=(e["start"], e["end"], e["duration_h"], e["app"],
                         e["window"], e["category"], e["state"]),
                 tags=(e["category"],),
             )
-            self.log_tree.tag_configure(e["category"], foreground=_cat_color(e["category"]))
+            # beim Kopieren den vollständigen Fenstertitel statt der gekürzten Anzeige
+            self.log_tree._full_rows[item] = [  # type: ignore[attr-defined]
+                e["start_iso"], e["end_iso"], e["duration_h"], e["app"],
+                e["title"] or e["window"], e["category"], e["state"],
+            ]
+            self.log_tree.tag_configure(e["category"], foreground=self._cat_color(e["category"]))
 
     def _fill_docs(self, s: dict) -> None:
         self._reset_tree(self.doc_tree)
@@ -324,13 +395,13 @@ class Dashboard:
             labels, values, colors, title = self._day_series()
 
         c.create_text(pad_l - 40, 8, text=title, anchor="nw",
-                      font=("Segoe UI Semibold", 10), fill="#334155")
+                      font=("Segoe UI Semibold", 10), fill=self.pal["text"])
         max_v = max(values) if values and max(values) > 0 else 1.0
         for frac in (0, 0.25, 0.5, 0.75, 1.0):
             y = pad_t + plot_h * (1 - frac)
-            c.create_line(pad_l, y, w - pad_r, y, fill="#eef2f7")
+            c.create_line(pad_l, y, w - pad_r, y, fill=self.pal["grid"])
             c.create_text(pad_l - 6, y, text=f"{max_v / 3600 * frac:.1f}h", anchor="e",
-                          font=("Segoe UI", 7), fill="#94a3b8")
+                          font=("Segoe UI", 7), fill=self.pal["text_muted"])
 
         n = max(1, len(values))
         slot = plot_w / n
@@ -345,14 +416,14 @@ class Dashboard:
                                    fill=color, outline="")
                 if bh > 26:
                     c.create_text(cx, y0 + 9, text=fmt_duration(val, short=True),
-                                  font=("Segoe UI", 7), fill="#ffffff")
+                                  font=("Segoe UI", 7), fill=self.pal["bar_label_on"])
                 else:
                     c.create_text(cx, y0 - 8, text=fmt_duration(val, short=True),
-                                  font=("Segoe UI", 7), fill="#475569")
+                                  font=("Segoe UI", 7), fill=self.pal["bar_label_off"])
         for i, label in enumerate(labels):
             if label:
                 c.create_text(pad_l + slot * i + slot / 2, baseline + 13, text=label,
-                              font=("Segoe UI", 7), fill="#64748b")
+                              font=("Segoe UI", 7), fill=self.pal["text_muted"])
 
     def _week_series(self):
         s = self._summary
@@ -361,19 +432,21 @@ class Dashboard:
             d = datetime.strptime(day, "%Y-%m-%d")
             labels.append(f"{WEEKDAYS[d.weekday()]} {d.strftime('%d.%m')}")
             values.append(s["by_day"].get(day, {}).get("active", 0.0))
-            colors.append("#2563eb")
+            colors.append(self.pal["bar"])
         return labels, values, colors, "Aktive Zeit pro Tag"
 
     def _day_series(self):
         buckets = reporting.hourly_active(self._segments)
         labels = [f"{h:02d}" if h % 3 == 0 else "" for h in range(24)]
-        colors = ["#2563eb"] * 24
+        colors = [self.pal["bar"]] * 24
         return labels, buckets, colors, "Aktive Zeit pro Stunde"
 
     # -- Tabellen-Helfer -------------------------------------------
     @staticmethod
     def _reset_tree(tree: ttk.Treeview) -> None:
         tree.delete(*tree.get_children())
+        if hasattr(tree, "_full_rows"):
+            tree._full_rows.clear()  # type: ignore[attr-defined]
 
     @staticmethod
     def _sort_tree(tree: ttk.Treeview, col: str) -> None:
@@ -415,6 +488,41 @@ class Dashboard:
             os.startfile(str(DATA_DIR))  # type: ignore[attr-defined]
         except AttributeError:
             subprocess.Popen(["explorer", str(DATA_DIR)])
+
+    def open_settings(self) -> None:
+        win = self._settings_win
+        if win is not None:
+            try:
+                if win.winfo_exists():
+                    win.deiconify(); win.lift(); win.focus_force()
+                    return
+            except tk.TclError:
+                pass
+        from .settings import SettingsDialog
+
+        old_mode = theme.resolve(self.config.get("theme", "system"))
+
+        def on_saved(data: dict) -> None:
+            self._settings_win = None
+            from . import autostart
+            try:
+                want = bool(data.get("autostart"))
+                if want and not autostart.is_enabled():
+                    autostart.enable()
+                elif not want and autostart.is_enabled():
+                    autostart.disable()
+            except Exception:  # noqa: BLE001
+                log.exception("Autostart-Änderung fehlgeschlagen")
+            if theme.resolve(data.get("theme", "system")) != old_mode:
+                self.root.after(60, self._rebuild)
+            else:
+                self.root.after(0, self._refresh)
+
+        def on_close() -> None:
+            self._settings_win = None
+
+        self._settings_win = SettingsDialog(self.root, self.config, self.pal,
+                                            on_saved=on_saved, on_close=on_close)
 
     # -- Lebenszyklus --------------------------------------------
     def _schedule(self, ms: int, fn) -> None:

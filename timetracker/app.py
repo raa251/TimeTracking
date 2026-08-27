@@ -5,6 +5,7 @@ import logging
 import logging.handlers
 import sys
 import threading
+import time
 from datetime import datetime
 
 from . import autostart
@@ -43,6 +44,8 @@ class Application:
         self.tracker = Tracker(self.db, self.config, status_callback=self._on_status)
         self._dashboard = None
         self._dashboard_thread: threading.Thread | None = None
+        self._dashboard_lock = threading.Lock()
+        self._dashboard_last_open = 0.0
         self._quitting = False
 
         from .tray import Tray  # verzögert: pystray importiert erst hier
@@ -86,26 +89,54 @@ class Application:
             log.exception("Statusaktualisierung fehlgeschlagen")
 
     def open_dashboard(self) -> None:
-        if self._dashboard_thread and self._dashboard_thread.is_alive() and self._dashboard:
-            try:
-                root = self._dashboard.root
-                root.after(0, lambda: (root.deiconify(), root.lift(), root.focus_force()))
-            except Exception:  # noqa: BLE001
-                pass
-            return
+        # Ein Doppelklick auf das Tray-Icon feuert die Standardaktion zweimal.
+        # Lock + Zeitfenster verhindern, dass dabei zwei Fenster entstehen.
+        with self._dashboard_lock:
+            now = time.monotonic()
+            recent = now - self._dashboard_last_open < 1.0
+            self._dashboard_last_open = now
 
-        def _run() -> None:
-            from .dashboard import Dashboard
-            try:
-                self._dashboard = Dashboard(self.db, self.config, self.shutdown_event)
-                self._dashboard.run()
-            except Exception:  # noqa: BLE001
-                log.exception("Dashboard-Thread abgestürzt")
-            finally:
-                self._dashboard = None
+            if self._dashboard_thread and self._dashboard_thread.is_alive():
+                dash = self._dashboard
+                if dash is not None:
+                    try:
+                        root = dash.root
+                        root.after(0, lambda: (root.deiconify(), root.lift(), root.focus_force()))
+                    except Exception:  # noqa: BLE001
+                        pass
+                return
 
-        self._dashboard_thread = threading.Thread(target=_run, name="Dashboard", daemon=True)
-        self._dashboard_thread.start()
+            if recent:
+                return  # zweiter Klick des Doppelklicks – Fenster startet bereits
+
+            def _run() -> None:
+                from .dashboard import Dashboard
+                try:
+                    self._dashboard = Dashboard(self.db, self.config, self.shutdown_event)
+                    self._dashboard.run()
+                except Exception:  # noqa: BLE001
+                    log.exception("Dashboard-Thread abgestürzt")
+                finally:
+                    self._dashboard = None
+
+            self._dashboard_thread = threading.Thread(target=_run, name="Dashboard", daemon=True)
+            self._dashboard_thread.start()
+
+    def open_settings(self) -> None:
+        """Dashboard öffnen (falls nötig) und den Einstellungs-Dialog anzeigen."""
+        self.open_dashboard()
+
+        def _later(attempt: int = 0) -> None:
+            dash = self._dashboard
+            if dash is not None:
+                try:
+                    dash.root.after(0, dash.open_settings)
+                except Exception:  # noqa: BLE001
+                    log.exception("Einstellungen konnten nicht geöffnet werden")
+            elif attempt < 40:
+                threading.Timer(0.1, _later, (attempt + 1,)).start()
+
+        _later()
 
     def toggle_pause(self) -> None:
         paused = self.tracker.toggle_pause()

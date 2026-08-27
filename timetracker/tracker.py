@@ -7,7 +7,7 @@ import time
 from datetime import datetime, time as dtime
 
 from . import winapi
-from .classify import categorize, friendly_app_name, is_private, parse_document
+from .classify import categorize, friendly_app_name, is_ignored, is_private, parse_document
 from .config import Config
 from .database import Database
 
@@ -67,13 +67,13 @@ class Tracker(threading.Thread):
     def run(self) -> None:
         log.info("Tracker gestartet (Intervall %ss)", self.config.get("poll_interval_seconds"))
         self._maybe_purge()
-        interval = max(1, int(self.config.get("poll_interval_seconds", 3)))
         while not self._stop_event.is_set():
             try:
                 self._tick()
             except Exception:  # noqa: BLE001  – Loop darf nie sterben
                 log.exception("Fehler im Tracker-Tick")
-            self._stop_event.wait(interval)
+            # Intervall bei jedem Durchlauf neu lesen – Änderung wirkt ohne Neustart
+            self._stop_event.wait(max(1, int(self.config.get("poll_interval_seconds", 3))))
         self._close_current(time.time())
         try:
             self.db.close()
@@ -106,7 +106,14 @@ class Tracker(threading.Thread):
         elif idle >= threshold:
             self._transition(STATE_IDLE, now, idle, today, info=None)
         else:
-            self._transition(STATE_ACTIVE, now, idle, today, info=winapi.get_active_window() or {})
+            info = winapi.get_active_window() or {}
+            if info.get("process") and is_ignored(info["process"], info.get("title", ""), self.config):
+                # transientes Shell-Fenster – laufenden Eintrag einfach weiterlaufen lassen
+                if self._seg and self._seg["state"] == STATE_ACTIVE:
+                    self.db.touch_segment(self._seg["id"], now)
+                    self._seg["end"] = now
+                return
+            self._transition(STATE_ACTIVE, now, idle, today, info=info)
 
     def _transition(self, state: str, now: float, idle: float, today: str, info: dict | None) -> None:
         info = info or {}

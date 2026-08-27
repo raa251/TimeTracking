@@ -165,10 +165,18 @@ DEFAULTS: dict = {
     # Datenschutz: für diese Prozesse/Titel werden keine Details gespeichert.
     "private_processes": ["keepass.exe", "keepassxc.exe", "1password.exe", "bitwarden.exe"],
     "private_title_patterns": ["passwort", "password", "banking", "\\bTAN\\b"],
+    # Transiente Shell-Fenster (Startmenü, Suche, Alt-Tab, Taskleisten-Overflow):
+    # der aktuelle Eintrag bleibt bestehen, statt für 1-2 s zu wechseln.
+    "ignore_processes": [
+        "SearchHost.exe", "SearchApp.exe", "StartMenuExperienceHost.exe",
+        "ShellExperienceHost.exe", "TextInputHost.exe", "LockApp.exe",
+    ],
+    "ignore_title_patterns": ["Überlauffenster der Taskleiste", "Task-Umschalten", "Task Switching"],
     "app_names": {},          # überschreibt/ergänzt DEFAULT_APP_NAMES
     "categories": [],         # ersetzt DEFAULT_CATEGORIES, wenn nicht leer
     "productivity": {},       # überschreibt/ergänzt DEFAULT_PRODUCTIVITY
     "idle_goal_hours": 6.0,   # Tagesziel "aktive Zeit" für die Fortschrittsanzeige
+    "theme": "system",        # "system" | "light" | "dark"
 }
 
 

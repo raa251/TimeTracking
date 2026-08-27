@@ -55,6 +55,7 @@ class Tray:
             MenuItem(lambda item: self._status_text, None, enabled=False),
             Menu.SEPARATOR,
             MenuItem("Dashboard öffnen", lambda: self.app.open_dashboard(), default=True),
+            MenuItem("Einstellungen …", lambda: self.app.open_settings()),
             MenuItem(
                 "Tracking pausiert",
                 lambda: self.app.toggle_pause(),

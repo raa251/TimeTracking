@@ -76,13 +76,12 @@ def categorize(process: str, title: str, config: Config) -> str:
     return "Sonstiges"
 
 
-def is_private(process: str, title: str, config: Config) -> bool:
-    """True, wenn für diese Aktivität keine Details gespeichert werden dürfen."""
+def _matches(process: str, title: str, procs_key: str, patterns_key: str, config: Config) -> bool:
     proc = process.lower()
-    if proc in {p.lower() for p in config.get("private_processes", [])}:
+    if proc in {p.lower() for p in config.get(procs_key, [])}:
         return True
-    title_l = (title or "")
-    for pattern in config.get("private_title_patterns", []):
+    title_l = title or ""
+    for pattern in config.get(patterns_key, []):
         try:
             if re.search(pattern, title_l, re.IGNORECASE):
                 return True
@@ -90,3 +89,16 @@ def is_private(process: str, title: str, config: Config) -> bool:
             if pattern.lower() in title_l.lower():
                 return True
     return False
+
+
+def is_private(process: str, title: str, config: Config) -> bool:
+    """True, wenn für diese Aktivität keine Details gespeichert werden dürfen."""
+    return _matches(process, title, "private_processes", "private_title_patterns", config)
+
+
+def is_ignored(process: str, title: str, config: Config) -> bool:
+    """True für transiente Shell-Fenster (Startmenü, Suche, Alt-Tab, Taskleisten-Overflow).
+
+    Solche Fenster sollen den laufenden Eintrag nicht unterbrechen.
+    """
+    return _matches(process, title, "ignore_processes", "ignore_title_patterns", config)
