@@ -184,6 +184,7 @@ DEFAULTS: dict = {
     "ignore_title_patterns": ["Überlauffenster der Taskleiste", "Task-Umschalten", "Task Switching"],
     "app_names": {},          # überschreibt/ergänzt DEFAULT_APP_NAMES
     "app_colors": {},         # {"Visual Studio Code": "#2563eb"} – eigene Farbe je App
+    "app_categories": {},     # {"Visual Studio Code": "Meine Kategorie"} – Kategorie je App
     "categories": [],         # ersetzt DEFAULT_CATEGORIES, wenn nicht leer
     "productivity": {},       # überschreibt/ergänzt DEFAULT_PRODUCTIVITY
     "idle_goal_hours": 6.0,   # Tagesziel "aktive Zeit" für die Fortschrittsanzeige
@@ -221,6 +222,10 @@ class Config:
     @property
     def app_colors(self) -> dict[str, str]:
         return dict(self.data.get("app_colors", {}))
+
+    @property
+    def app_categories(self) -> dict[str, str]:
+        return dict(self.data.get("app_categories", {}))
 
     @property
     def categories(self) -> list[dict]:

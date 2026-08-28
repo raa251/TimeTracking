@@ -29,7 +29,7 @@ Alle Daten bleiben **lokal** auf dem Rechner. Kein Netzwerk, kein Konto.
 | **Feste Taktung** | Das aktive Fenster wird alle `poll_interval_seconds` (Standard **3 s**) geprüft – nicht ereignisgesteuert. In den Einstellungen änderbar. |
 | **Editor = Projekt** | VS Code, Cursor, JetBrains … werden in der Standardansicht pro **Projekt/Ordner** zusammengefasst (übersichtlicher). Der Haken **„Detailansicht (pro Datei)“** in *Verlauf* / *Dateien* zeigt jederzeit die Einzeldateien. Browser-Tabs bleiben immer einzeln. |
 | **Entwicklermodus** | Optional: Spalte **Branch** in *Verlauf* und *Dateien / Fenster*. Der Branch kommt **ausschließlich aus `.git/HEAD`** – die lokalen Repos werden beim Start automatisch gefunden. Zuordnung: über den Ordnernamen (VS Code, Explorer), über den vollen Pfad im Titel (Notepad++) oder – wenn der Titel nur den Dateinamen zeigt (MetaEditor) – durch Suche der Datei in den bekannten Repos. |
-| **App-Farben** | Eigene Farbe je App über den *Apps*-Tab (Klick auf **✎**); überschreibt die Kategorie-Farbe in allen Tabellen. |
+| **App-Farbe & -Kategorie** | Über den *Apps*-Tab (Klick auf **✎**): eigene Farbe und Kategorie je App. Eine noch nicht vorhandene Kategorie wird beim Eintippen angelegt. Wirkt rückwirkend auf alle Auswertungen. |
 | **Gesamtdauer & Log** | Pro Tag und über 7 Tage: aktive Gesamtzeit, plus chronologisches Log „Datum, von–bis, welche App, welches Fenster, welche Kategorie, welcher Status“ – neueste zuerst. |
 | **Letzte 7 Tage** | Immer verfügbar (Standard-Aufbewahrung sogar 90 Tage). |
 | **Leerlauf-Erkennung** | Ab 120 s ohne Eingabe wird „Abwesend“ statt der App gezählt; der Wechselzeitpunkt wird auf die letzte echte Eingabe zurückdatiert. |
@@ -92,7 +92,7 @@ Im Dashboard (Tabs *Übersicht · Apps · Verlauf · Dateien / Fenster · Einste
   Projekt-Zusammenfassung und Einzeldateien um (mit Pfad ab dem Projektordner).
 * **Verlauf**: neueste Einträge oben; Klick auf einen Spaltenkopf sortiert danach
   (nochmal klicken kehrt um).
-* **Apps**: Klick auf **✎** öffnet die Farbwahl für die App.
+* **Apps**: Klick auf **✎** → Fenster für **Farbe & Kategorie** der App (neue Kategorie eintippen legt sie an).
 * Zeilen markieren (mehrere mit Shift/Strg, alle mit **Strg+A**) und mit **Strg+C**
   oder **Rechtsklick → Kopieren** in die Zwischenablage holen – tabulatorgetrennt,
   direkt in Excel einfügbar. Im *Verlauf* wird dabei der **vollständige** Fenstertitel
@@ -177,6 +177,7 @@ die Datei kann aber auch direkt bearbeitet werden.
 | `developer_mode` | `false` | Branch-Spalte in Verlauf / Dateien einblenden (Repos werden automatisch gefunden) |
 | `project_roots` | `[]` | *optional* – zusätzliche Ordner für den Repo-Scan (normalerweise nicht nötig) |
 | `app_colors` | `{}` | Eigene Farbe je App: `{"Visual Studio Code": "#2563eb"}` (Apps-Tab → ✎) |
+| `app_categories` | `{}` | Eigene Kategorie je App: `{"Visual Studio Code": "Meine Firma"}` (Apps-Tab → ✎) |
 | `idle_goal_hours` | `6.0` | Tagesziel „aktive Zeit“ |
 | `theme` | `"system"` | `"system"` \| `"light"` \| `"dark"` |
 | `private_processes` | Passwort-Manager | Keine Details speichern |
@@ -220,7 +221,8 @@ timetracker/
   database.py         SQLite (WAL, eine Verbindung pro Thread, Spalten-Migration)
   tracker.py          Hintergrund-Thread: pollt & schreibt Segmente (pro Datei)
   reporting.py        Aggregation, Verlauf, Projekt-Collapse, CSV/JSON-Export
-  dashboard.py        Tkinter-Fenster (Kennzahlen, Diagramme, Tabellen, Copy, App-Farben)
+  dashboard.py        Tkinter-Fenster (Kennzahlen, Diagramme, Tabellen, Copy)
+  appstyle.py         Dialog "Farbe & Kategorie" je App (theme-bewusst)
   theme.py            Hell-/Dunkel-Paletten + ttk-Styling + Titelleisten-Farbe
   settings.py         Einstellungen-Panel (Formular-Tab für alle config.json-Optionen)
   tray.py             pystray-Icon + Menü (+ .ico-Erzeugung für den Build)

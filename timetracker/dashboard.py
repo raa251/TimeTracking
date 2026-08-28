@@ -111,7 +111,7 @@ class Dashboard:
         self.config.save()
         self._refresh()
 
-    # -- App-Farbe bearbeiten -------------------------------------
+    # -- App-Darstellung (Farbe + Kategorie) bearbeiten ----------
     def _on_app_tree_click(self, event) -> None:
         tree = self.app_tree
         if tree.identify_region(event.x, event.y) != "cell":
@@ -121,27 +121,49 @@ class Dashboard:
             return
         item = tree.identify_row(event.y)
         if item:
-            self._edit_app_color(tree.item(item, "values")[0])
+            self._edit_app_style(tree.item(item, "values")[0])
 
-    def _edit_app_color(self, app: str) -> None:
-        from tkinter import colorchooser
+    def _known_categories(self) -> set[str]:
+        cats: set[str] = set(self.config.productivity)          # inkl. interne Defaults
+        for rule in self.config.categories:
+            cats.add(rule.get("category", ""))
+        cats.update(self.config.app_categories.values())
+        for seg in getattr(self, "_segments", []):
+            if seg.category:
+                cats.add(seg.category)
+        cats.discard("")
+        return cats
 
-        current = self.config.app_colors.get(app)
-        picked = colorchooser.askcolor(
-            color=current or self._cat_color(""), title=f"Farbe für {app}", parent=self.root
+    def _edit_app_style(self, app: str) -> None:
+        from .appstyle import AppStyleDialog
+
+        AppStyleDialog(
+            self.root, app_name=app, palette=self.pal, mode=self.mode,
+            color=self.config.app_colors.get(app, ""),
+            category=self.config.app_categories.get(app, ""),
+            categories=self._known_categories(),
+            on_apply=lambda color, category: self._save_app_style(app, color, category),
         )
-        color = picked[1] if picked else None
+
+    def _save_app_style(self, app: str, color: str, category: str) -> None:
         colors = dict(self.config.data.get("app_colors", {}))
         if color:
             colors[app] = color
-        elif current and messagebox.askyesno(
-            "Farbe", f"Eigene Farbe für „{app}“ entfernen (zurück zur Kategorie-Farbe)?",
-            parent=self.root,
-        ):
-            colors.pop(app, None)
         else:
-            return
+            colors.pop(app, None)
+
+        cats = dict(self.config.data.get("app_categories", {}))
+        if category:
+            cats[app] = category
+            if category not in self.config.productivity:      # neue Kategorie "anlegen"
+                prod = dict(self.config.data.get("productivity", {}))
+                prod[category] = 0                            # neutral
+                self.config.data["productivity"] = prod
+        else:
+            cats.pop(app, None)
+
         self.config.data["app_colors"] = colors
+        self.config.data["app_categories"] = cats
         self.config.save()
         self._refresh()
 
@@ -233,7 +255,7 @@ class Dashboard:
         # -- Tab: Apps ----------------------------------------------
         tab_apps = ttk.Frame(nb, padding=8)
         nb.add(tab_apps, text="  Apps  ")
-        ttk.Label(tab_apps, text="Klick auf  ✎  öffnet die Farbwahl für die App.",
+        ttk.Label(tab_apps, text="Klick auf  ✎  öffnet Farbe & Kategorie der App.",
                   style="Hint.TLabel").pack(anchor="w", pady=(0, 4))
         self.app_tree = self._make_tree(
             tab_apps, ("App", "Kategorie", "Dauer", "Anteil", "✎"),
@@ -374,6 +396,7 @@ class Dashboard:
             segs = reporting.load_range(self.db, self.range_days[0], self.range_days[-1])
         else:
             segs = reporting.load_day(self.db, sel)
+        reporting.apply_category_overrides(segs, self.config)  # eigene App-Kategorien rückwirkend
         if not self.detail_view.get():
             segs = reporting.collapse_projects(segs, self.config)
         return segs

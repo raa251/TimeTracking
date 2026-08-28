@@ -52,6 +52,8 @@ _SPEC: list[tuple] = [
      'Prozessname → Anzeigename.  Beispiel:  {"meinprog.exe": "Mein Programm"}'),
     ("Erweitert", "app_colors", "Eigene App-Farben  (JSON-Objekt)", "json", dict,
      'Bequemer über den Apps-Tab (✎).  Beispiel:  {"Visual Studio Code": "#2563eb"}'),
+    ("Erweitert", "app_categories", "Eigene Kategorie je App  (JSON-Objekt)", "json", dict,
+     'Bequemer über den Apps-Tab (✎).  Beispiel:  {"Visual Studio Code": "Meine Firma"}'),
     ("Erweitert", "categories", "Kategorie-Regeln  (JSON-Liste)", "json", list,
      'Leere Liste = interne Vorgaben.  '
      '[{"category": "Meine Firma", "processes": ["sap.exe"], "title_patterns": ["JIRA"]}]'),

@@ -51,6 +51,17 @@ def _rows_to_segments(rows) -> list[Segment]:
     return out
 
 
+def apply_category_overrides(segments: list[Segment], config: Config) -> list[Segment]:
+    """Setzt ``s.category`` gemäß ``config.app_categories`` (rückwirkend fürs Dashboard)."""
+    overrides = config.app_categories
+    if overrides:
+        for s in segments:
+            new = overrides.get(s.app)
+            if new:
+                s.category = new
+    return segments
+
+
 def collapse_projects(segments: list[Segment], config: Config) -> list[Segment]:
     """Fasst aufeinanderfolgende Editor-Segmente desselben Projekts (+ Branch) zusammen.
 

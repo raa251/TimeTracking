@@ -168,7 +168,8 @@ class Tracker(threading.Thread):
                 process = process or "privat"
             else:
                 app = friendly_app_name(process, self.config) if process else "Unbekannt"
-                category = categorize(process, title, self.config)
+                category = (self.config.data.get("app_categories", {}).get(app)
+                            or categorize(process, title, self.config))
                 editor = is_code_editor(process, self.config)
                 if editor:
                     document = editor_document(title, process)
