@@ -37,6 +37,16 @@ def save_ico(path: str) -> None:
               sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
 
 
+def icon_photo_data() -> str:
+    """Base64-PNG des Tray-Icons – für ``tk.PhotoImage(data=...)`` als Fenstersymbol."""
+    import base64
+    import io
+
+    buf = io.BytesIO()
+    make_image(False, 64).save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 class Tray:
     def __init__(self, app):
         self.app = app

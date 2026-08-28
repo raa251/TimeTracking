@@ -7,7 +7,18 @@ import time
 from datetime import datetime, time as dtime
 
 from . import winapi
-from .classify import categorize, friendly_app_name, is_ignored, is_private, parse_document
+from .classify import (
+    branch_from_git,
+    branch_from_title,
+    categorize,
+    editor_document,
+    friendly_app_name,
+    is_code_editor,
+    is_ignored,
+    is_private,
+    parse_document,
+    project_name,
+)
 from .config import Config
 from .database import Database
 
@@ -40,6 +51,7 @@ class Tracker(threading.Thread):
         self._seg: dict | None = None          # aktuell offenes Segment
         self._last_purge = ""
         self._last_status = 0.0
+        self._branch_cache: dict[str, tuple[str, float]] = {}  # projekt -> (branch, geprüft_um)
 
     # -- öffentliche Steuerung -------------------------------------------
     def stop(self) -> None:
@@ -122,6 +134,9 @@ class Tracker(threading.Thread):
         title = raw_title if self.config.get("track_titles", True) else ""
         exe_path = info.get("exe_path", "")
 
+        document = branch = ""
+        # Es wird pro Datei/Tab gespeichert; das Zusammenfassen zu "Projekt"
+        # passiert erst bei der Anzeige (Detailansicht-Schalter im Dashboard).
         if state == STATE_ACTIVE:
             if is_private(process, raw_title, self.config):
                 app, document, category = "Privat", "", "Privat"
@@ -129,8 +144,14 @@ class Tracker(threading.Thread):
                 process = process or "privat"
             else:
                 app = friendly_app_name(process, self.config) if process else "Unbekannt"
-                document = parse_document(title, process)
                 category = categorize(process, title, self.config)
+                if is_code_editor(process, self.config):
+                    document = editor_document(title, process)
+                    project_hint = project_name(title, process)
+                else:
+                    document = parse_document(title, process)
+                    project_hint = document if process.lower() == "explorer.exe" else ""
+                branch = self._resolve_branch(raw_title, project_hint)
             key = (state, process.lower(), title)
         else:
             app = "Abwesend" if state == STATE_IDLE else "Gesperrt"
@@ -157,10 +178,26 @@ class Tracker(threading.Thread):
 
         seg_id = self.db.open_segment(
             start_utc=boundary, day=today, state=state, process=process,
-            exe_path=exe_path, app=app, title=title, document=document, category=category,
+            exe_path=exe_path, app=app, title=title, document=document,
+            category=category, branch=branch,
         )
         self._seg = {"id": seg_id, "key": key, "state": state, "day": today,
                      "start": boundary, "end": boundary}
+
+    def _resolve_branch(self, raw_title: str, project_hint: str) -> str:
+        branch = branch_from_title(raw_title)
+        if branch:
+            return branch
+        roots = self.config.get("project_roots", [])
+        if not roots or not project_hint:
+            return ""
+        now = time.time()
+        cached = self._branch_cache.get(project_hint)
+        if cached and now - cached[1] < 15:
+            return cached[0]
+        branch = branch_from_git(project_hint, roots)
+        self._branch_cache[project_hint] = (branch, now)
+        return branch
 
     def _close_current(self, end_utc: float) -> None:
         cur = self._seg

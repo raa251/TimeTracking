@@ -31,15 +31,19 @@ class Dashboard:
 
         self.root = tk.Tk()
         self.root.title("TimeTracker – Dashboard")
-        self.root.geometry("1060x740")
-        self.root.minsize(900, 600)
+        self.root.geometry("1130x760")
+        self.root.minsize(940, 600)
+        self._set_window_icon()
 
         self.range_days = reporting.last_n_days(7)
         self.selection = tk.StringVar(value="week")
         self.log_filter = tk.StringVar(value="alle")
+        # Detailansicht = pro Datei; sonst pro Projekt zusammengefasst
+        self.detail_view = tk.BooleanVar(
+            value=not bool(config.get("collapse_editor_projects", True))
+        )
         self._style = ttk.Style(self.root)
         self._nb_tab = 0
-        self._settings_win = None
 
         self._build_all()
 
@@ -66,8 +70,6 @@ class Dashboard:
         except Exception:  # noqa: BLE001
             pass
         for widget in list(self.root.winfo_children()):
-            if widget is self._settings_win:
-                continue
             widget.destroy()
         self._build_all()
         try:
@@ -85,10 +87,59 @@ class Dashboard:
     def _cat_color(self, name: str) -> str:
         return self.cat_colors.get(name, self.pal["text_muted"])
 
-    def _toggle_theme(self) -> None:
-        self.config.data["theme"] = "dark" if self.mode == "light" else "light"
+    def _row_color(self, app: str, category: str) -> str:
+        """Farbe für eine Zeile: eigene App-Farbe, sonst Kategorie-Farbe."""
+        custom = self.config.app_colors.get(app)
+        return custom or self._cat_color(category)
+
+    def _on_detail_toggle(self) -> None:
+        self.config.data["collapse_editor_projects"] = not self.detail_view.get()
         self.config.save()
-        self._rebuild()
+        self._refresh()
+
+    # -- App-Farbe bearbeiten -------------------------------------
+    def _on_app_tree_click(self, event) -> None:
+        tree = self.app_tree
+        if tree.identify_region(event.x, event.y) != "cell":
+            return
+        last_col = f"#{len(tree._columns)}"  # type: ignore[attr-defined]  – die ✎-Spalte
+        if tree.identify_column(event.x) != last_col:
+            return
+        item = tree.identify_row(event.y)
+        if item:
+            self._edit_app_color(tree.item(item, "values")[0])
+
+    def _edit_app_color(self, app: str) -> None:
+        from tkinter import colorchooser
+
+        current = self.config.app_colors.get(app)
+        picked = colorchooser.askcolor(
+            color=current or self._cat_color(""), title=f"Farbe für {app}", parent=self.root
+        )
+        color = picked[1] if picked else None
+        colors = dict(self.config.data.get("app_colors", {}))
+        if color:
+            colors[app] = color
+        elif current and messagebox.askyesno(
+            "Farbe", f"Eigene Farbe für „{app}“ entfernen (zurück zur Kategorie-Farbe)?",
+            parent=self.root,
+        ):
+            colors.pop(app, None)
+        else:
+            return
+        self.config.data["app_colors"] = colors
+        self.config.save()
+        self._refresh()
+
+    def _set_window_icon(self) -> None:
+        """Fenster-/Taskleistensymbol = Tray-Icon (statt Standard-Tk-Feder)."""
+        try:
+            from .tray import icon_photo_data
+
+            self._icon_img = tk.PhotoImage(data=icon_photo_data())
+            self.root.iconphoto(True, self._icon_img)
+        except Exception:  # noqa: BLE001
+            log.debug("Fenster-Icon konnte nicht gesetzt werden", exc_info=True)
 
     def _build_toolbar(self) -> None:
         bar = ttk.Frame(self.root, padding=(10, 8))
@@ -115,10 +166,7 @@ class Dashboard:
         self.period_box.pack(side="left")
         ttk.Button(bar, text="Aktualisieren", command=self._refresh).pack(side="left", padx=8)
 
-        ttk.Button(bar, text="Einstellungen", command=self.open_settings).pack(side="right")
-        ttk.Button(bar, text=("Dunkelmodus" if self.mode == "light" else "Hellmodus"),
-                   command=self._toggle_theme).pack(side="right", padx=8)
-        ttk.Button(bar, text="Ordner", width=8, command=self._open_folder).pack(side="right", padx=(0, 8))
+        ttk.Button(bar, text="Ordner", width=8, command=self._open_folder).pack(side="right")
         ttk.Button(bar, text="JSON", width=6, command=lambda: self._export("json")).pack(side="right", padx=(0, 4))
         ttk.Button(bar, text="CSV", width=6, command=lambda: self._export("csv")).pack(side="right", padx=(0, 4))
         ttk.Label(bar, text="Export:").pack(side="right", padx=(8, 4))
@@ -154,6 +202,7 @@ class Dashboard:
         nb = ttk.Notebook(self.root)
         nb.pack(fill="both", expand=True, padx=10, pady=(4, 6))
         self._nb = nb
+        dev = bool(self.config.get("developer_mode", False))
 
         # -- Tab: Übersicht -------------------------------------------
         tab_overview = ttk.Frame(nb, padding=8)
@@ -170,28 +219,60 @@ class Dashboard:
         # -- Tab: Apps ----------------------------------------------
         tab_apps = ttk.Frame(nb, padding=8)
         nb.add(tab_apps, text="  Apps  ")
-        self.app_tree = self._make_tree(tab_apps, ("App", "Kategorie", "Dauer", "Anteil"),
-                                        widths=(300, 260, 120, 100), stretch_col="Kategorie")
+        ttk.Label(tab_apps, text="Klick auf  ✎  öffnet die Farbwahl für die App.",
+                  style="Hint.TLabel").pack(anchor="w", pady=(0, 4))
+        self.app_tree = self._make_tree(
+            tab_apps, ("App", "Kategorie", "Dauer", "Anteil", "✎"),
+            widths=(300, 240, 120, 90, 34), stretch_col="Kategorie",
+        )
+        self.app_tree.bind("<Button-1>", self._on_app_tree_click)
 
         # -- Tab: Verlauf -----------------------------------------
         tab_log = ttk.Frame(nb, padding=8)
-        nb.add(tab_log, text="  Verlauf (Log)  ")
+        nb.add(tab_log, text="  Verlauf  ")
         fbar = ttk.Frame(tab_log)
         fbar.pack(fill="x", pady=(0, 4))
         ttk.Label(fbar, text="Anzeigen:").pack(side="left")
         for lbl in ("alle", "nur aktiv"):
             ttk.Radiobutton(fbar, text=lbl, value=lbl, variable=self.log_filter,
                             command=self._refresh).pack(side="left", padx=4)
-        self.log_tree = self._make_tree(
-            tab_log, ("Von", "Bis", "Dauer", "App", "Fenster / Datei", "Kategorie", "Status"),
-            widths=(88, 88, 96, 200, 340, 200, 78), stretch_col="Fenster / Datei",
-        )
+        ttk.Checkbutton(fbar, text="Detailansicht (pro Datei)", variable=self.detail_view,
+                        command=self._on_detail_toggle).pack(side="left", padx=16)
+        log_cols = ["Datum", "Von", "Bis", "Dauer", "App"]
+        log_w = [118, 62, 62, 104, 214]
+        if dev:
+            log_cols.append("Branch"); log_w.append(140)
+        log_cols += ["Fenster / Datei", "Kategorie", "Status"]
+        log_w += [300, 176, 112]
+        self.log_tree = self._make_tree(tab_log, tuple(log_cols), tuple(log_w),
+                                        stretch_col="Fenster / Datei")
 
-        # -- Tab: Dateien -----------------------------------------
+        # -- Tab: Dateien / Fenster ------------------------------
         tab_docs = ttk.Frame(nb, padding=8)
         nb.add(tab_docs, text="  Dateien / Fenster  ")
-        self.doc_tree = self._make_tree(tab_docs, ("App", "Fenster / Datei", "Dauer", "Anteil"),
-                                        widths=(240, 520, 120, 100), stretch_col="Fenster / Datei")
+        dbar = ttk.Frame(tab_docs)
+        dbar.pack(fill="x", pady=(0, 4))
+        ttk.Checkbutton(dbar, text="Detailansicht (pro Datei)", variable=self.detail_view,
+                        command=self._on_detail_toggle).pack(side="left")
+        doc_cols = ["App"]
+        doc_w = [230]
+        if dev:
+            doc_cols.append("Branch"); doc_w.append(140)
+        doc_cols += ["Fenster / Datei", "Dauer", "Anteil"]
+        doc_w += [430, 120, 90]
+        self.doc_tree = self._make_tree(tab_docs, tuple(doc_cols), tuple(doc_w),
+                                        stretch_col="Fenster / Datei")
+
+        # -- Tab: Einstellungen ---------------------------------
+        from .settings import SettingsPanel
+
+        settings_tab = ttk.Frame(nb, padding=4)
+        nb.add(settings_tab, text="  Einstellungen  ")
+        self._settings_index = nb.index("end") - 1
+        self._settings_panel = SettingsPanel(
+            settings_tab, self.config, self.pal, on_saved=self._on_settings_saved
+        )
+        self._settings_panel.pack(fill="both", expand=True)
 
     def _build_statusbar(self) -> None:
         self.status = ttk.Label(self.root, text="", anchor="w", padding=(10, 3),
@@ -205,14 +286,19 @@ class Dashboard:
         vsb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
         tree.configure(yscrollcommand=vsb.set)
         for col, width in zip(columns, widths):
-            anchor = "e" if col in ("Dauer", "Anteil") else "w"
-            tree.heading(col, text=col, anchor=anchor,
-                         command=lambda c=col, t=tree: self._sort_tree(t, c))
-            tree.column(col, width=width, minwidth=48, anchor=anchor,
+            if col in ("Dauer", "Anteil"):
+                anchor = "e"
+            elif col in ("Datum", "Von", "Bis", "Status", "✎"):
+                anchor = "center"
+            else:
+                anchor = "w"
+            heading_cmd = "" if col == "✎" else (lambda c=col, t=tree: self._sort_tree(t, c))
+            tree.heading(col, text=col, anchor=anchor, command=heading_cmd)
+            tree.column(col, width=width, minwidth=(28 if col == "✎" else 44), anchor=anchor,
                         stretch=(col == stretch_col))
         tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
-        tree._sort_state = {}   # type: ignore[attr-defined]
+        tree._active_sort = (None, None)  # type: ignore[attr-defined]  (Spalte, absteigend?)
         tree._full_rows = {}    # type: ignore[attr-defined]  Item -> volle Werte (z. B. ganzer Titel)
         tree._columns = tuple(columns)  # type: ignore[attr-defined]
         self._install_copy(tree)
@@ -271,8 +357,12 @@ class Dashboard:
     def _current_segments(self):
         sel = self.selection.get()
         if sel == "week":
-            return reporting.load_range(self.db, self.range_days[0], self.range_days[-1])
-        return reporting.load_day(self.db, sel)
+            segs = reporting.load_range(self.db, self.range_days[0], self.range_days[-1])
+        else:
+            segs = reporting.load_day(self.db, sel)
+        if not self.detail_view.get():
+            segs = reporting.collapse_projects(segs, self.config)
+        return segs
 
     def _refresh(self) -> None:
         try:
@@ -335,45 +425,51 @@ class Dashboard:
 
     def _fill_apps(self, s: dict) -> None:
         self._reset_tree(self.app_tree)
-        # App -> Kategorie über die Segmente ermitteln
         cat_by_app: dict[str, str] = {}
         for seg in getattr(self, "_segments", []):
             if seg.state == "active":
                 cat_by_app.setdefault(seg.app, seg.category)
+        self._cat_by_app = cat_by_app
         for row in s["by_app"]:
-            cat = cat_by_app.get(row["label"], "")
-            self.app_tree.insert(
-                "", "end",
-                values=(row["label"], cat, fmt_duration(row["seconds"], short=True), f"{row['pct']:.1f}%"),
-                tags=(cat,),
-            )
-            self.app_tree.tag_configure(cat, foreground=self._cat_color(cat))
+            app = row["label"]
+            cat = cat_by_app.get(app, "")
+            color = self._row_color(app, cat)
+            vals = (app, cat, fmt_duration(row["seconds"], short=True), f"{row['pct']:.1f}%", "✎")
+            item = self.app_tree.insert("", "end", values=vals, tags=(color,))
+            self.app_tree._full_rows[item] = list(vals[:-1])  # type: ignore[attr-defined]
+            self.app_tree.tag_configure(color, foreground=color)
 
     def _fill_log(self, segments) -> None:
         self._reset_tree(self.log_tree)
+        dev = "Branch" in self.log_tree._columns  # type: ignore[attr-defined]
         states = ("active",) if self.log_filter.get() == "nur aktiv" else ("active", "idle", "locked")
-        for e in reporting.timeline(segments, include_states=states):
-            item = self.log_tree.insert(
-                "", "end",
-                values=(e["start"], e["end"], e["duration_h"], e["app"],
-                        e["window"], e["category"], e["state"]),
-                tags=(e["category"],),
-            )
-            # beim Kopieren den vollständigen Fenstertitel statt der gekürzten Anzeige
-            self.log_tree._full_rows[item] = [  # type: ignore[attr-defined]
-                e["start_iso"], e["end_iso"], e["duration_h"], e["app"],
-                e["title"] or e["window"], e["category"], e["state"],
-            ]
-            self.log_tree.tag_configure(e["category"], foreground=self._cat_color(e["category"]))
+        entries = reporting.timeline(segments, include_states=states)
+        for e in reversed(entries):  # Standard: neueste Einträge oben
+            row = [e["date"], e["start"], e["end"], e["duration_h"], e["app"]]
+            full = [e["date"], e["start_iso"], e["end_iso"], e["duration_h"], e["app"]]
+            if dev:
+                row.append(e["branch"])
+                full.append(e["branch"])
+            row += [e["window"], e["category"], e["state"]]
+            full += [e["title"] or e["window"], e["category"], e["state"]]
+            color = self._row_color(e["app"], e["category"])
+            item = self.log_tree.insert("", "end", values=tuple(row), tags=(color,))
+            self.log_tree._full_rows[item] = full  # type: ignore[attr-defined]
+            self.log_tree.tag_configure(color, foreground=color)
+        self._apply_saved_sort(self.log_tree)
 
     def _fill_docs(self, s: dict) -> None:
         self._reset_tree(self.doc_tree)
+        dev = "Branch" in self.doc_tree._columns  # type: ignore[attr-defined]
         for row in s["by_document"][:400]:
-            self.doc_tree.insert(
-                "", "end",
-                values=(row["app"], row["document"], fmt_duration(row["seconds"], short=True),
-                        f"{row['pct']:.1f}%"),
-            )
+            vals = [row["app"]]
+            if dev:
+                vals.append(row.get("branch", ""))
+            vals += [row["document"], fmt_duration(row["seconds"], short=True), f"{row['pct']:.1f}%"]
+            color = self._row_color(row["app"], row.get("category", ""))
+            item = self.doc_tree.insert("", "end", values=tuple(vals), tags=(color,))
+            self.doc_tree._full_rows[item] = list(vals)  # type: ignore[attr-defined]
+            self.doc_tree.tag_configure(color, foreground=color)
 
     # -- Diagramm ----------------------------------------------------
     def _draw_chart(self) -> None:
@@ -448,20 +544,27 @@ class Dashboard:
         if hasattr(tree, "_full_rows"):
             tree._full_rows.clear()  # type: ignore[attr-defined]
 
+    def _sort_tree(self, tree: ttk.Treeview, col: str) -> None:
+        prev_col, prev_rev = getattr(tree, "_active_sort", (None, None))
+        reverse = (not prev_rev) if col == prev_col else False
+        tree._active_sort = (col, reverse)  # type: ignore[attr-defined]
+        self._do_sort(tree, col, reverse)
+
     @staticmethod
-    def _sort_tree(tree: ttk.Treeview, col: str) -> None:
-        state = tree._sort_state  # type: ignore[attr-defined]
-        reverse = not state.get(col, False)
-        state.clear()
-        state[col] = reverse
-
-        def key(item):
-            raw = tree.set(item, col)
-            return reporting_sort_key(raw)
-
-        rows = sorted(tree.get_children(""), key=key, reverse=reverse)
+    def _do_sort(tree: ttk.Treeview, col: str, reverse: bool) -> None:
+        rows = sorted(tree.get_children(""),
+                      key=lambda i: reporting_sort_key(tree.set(i, col)), reverse=reverse)
         for idx, item in enumerate(rows):
             tree.move(item, "", idx)
+        for c in getattr(tree, "_columns", ()):  # type: ignore[attr-defined]
+            arrow = ("  ▼" if reverse else "  ▲") if c == col else ""
+            tree.heading(c, text=c + arrow)
+
+    @staticmethod
+    def _apply_saved_sort(tree: ttk.Treeview) -> None:
+        active = getattr(tree, "_active_sort", None)
+        if active and active[0]:
+            Dashboard._do_sort(tree, active[0], active[1])
 
     # -- Aktionen -------------------------------------------------
     def _export(self, fmt: str) -> None:
@@ -490,39 +593,35 @@ class Dashboard:
             subprocess.Popen(["explorer", str(DATA_DIR)])
 
     def open_settings(self) -> None:
-        win = self._settings_win
-        if win is not None:
-            try:
-                if win.winfo_exists():
-                    win.deiconify(); win.lift(); win.focus_force()
-                    return
-            except tk.TclError:
-                pass
-        from .settings import SettingsDialog
+        """Wechselt auf den Einstellungen-Tab (kein separates Fenster)."""
+        try:
+            self._nb.select(self._settings_index)
+        except (AttributeError, tk.TclError):
+            pass
 
-        old_mode = theme.resolve(self.config.get("theme", "system"))
+    def _on_settings_saved(self, data: dict) -> None:
+        from . import autostart
+        old_mode = getattr(self, "mode", theme.resolve(self.config.get("theme", "system")))
+        try:
+            want = bool(data.get("autostart"))
+            if want and not autostart.is_enabled():
+                autostart.enable()
+            elif not want and autostart.is_enabled():
+                autostart.disable()
+        except Exception:  # noqa: BLE001
+            log.exception("Autostart-Änderung fehlgeschlagen")
 
-        def on_saved(data: dict) -> None:
-            self._settings_win = None
-            from . import autostart
-            try:
-                want = bool(data.get("autostart"))
-                if want and not autostart.is_enabled():
-                    autostart.enable()
-                elif not want and autostart.is_enabled():
-                    autostart.disable()
-            except Exception:  # noqa: BLE001
-                log.exception("Autostart-Änderung fehlgeschlagen")
-            if theme.resolve(data.get("theme", "system")) != old_mode:
-                self.root.after(60, self._rebuild)
-            else:
-                self.root.after(0, self._refresh)
-
-        def on_close() -> None:
-            self._settings_win = None
-
-        self._settings_win = SettingsDialog(self.root, self.config, self.pal,
-                                            on_saved=on_saved, on_close=on_close)
+        if "collapse_editor_projects" in data:  # nur beim Zurücksetzen enthalten
+            self.detail_view.set(not bool(data["collapse_editor_projects"]))
+        theme_changed = theme.resolve(data.get("theme", self.config.get("theme"))) != old_mode
+        dev_changed = bool(data.get("developer_mode")) != (
+            "Branch" in getattr(self.log_tree, "_columns", ())
+        )
+        if theme_changed or dev_changed:
+            self.root.after(50, lambda: (self._rebuild(), self._nb.select(0)))
+        else:
+            self._nb.select(0)
+            self._refresh()
 
     # -- Lebenszyklus --------------------------------------------
     def _schedule(self, ms: int, fn) -> None:
@@ -556,15 +655,18 @@ class Dashboard:
 
 
 def reporting_sort_key(raw: str):
-    """Sortierschlüssel: erkennt Dauer ('1h 02m'), Prozent und Zeiten."""
-    txt = raw.strip()
+    """Sortierschlüssel: erkennt Datum ('27.08.2026'), Dauer ('1h 02m'), Prozent, Zeiten."""
+    txt = raw.strip().rstrip(" ▲▼")
     if txt.endswith("%"):
         try:
             return float(txt[:-1].replace(",", "."))
         except ValueError:
             return 0.0
-    # Dauer wie "1h 02m 03s" / "2m 05s" / "45s"
     import re
+    if re.fullmatch(r"\d{2}\.\d{2}\.\d{4}", txt):
+        d, m, y = txt.split(".")
+        return float(y + m + d)
+    # Dauer wie "1h 02m 03s" / "2m 05s" / "45s"
     m = re.findall(r"(\d+)\s*([hms])", txt)
     if m:
         secs = 0

@@ -5,9 +5,11 @@ import csv
 import io
 import json
 from collections import defaultdict
+from copy import copy
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 
+from . import classify
 from .config import Config
 from .database import Database
 
@@ -25,6 +27,7 @@ class Segment:
     title: str
     document: str
     category: str
+    branch: str = ""
 
     @property
     def duration(self) -> float:
@@ -41,7 +44,43 @@ class Segment:
 
 def _rows_to_segments(rows) -> list[Segment]:
     fields = Segment.__dataclass_fields__
-    return [Segment(**{k: r[k] for k in fields}) for r in rows]
+    out = []
+    for r in rows:
+        keys = r.keys()
+        out.append(Segment(**{k: r[k] for k in fields if k in keys}))
+    return out
+
+
+def collapse_projects(segments: list[Segment], config: Config) -> list[Segment]:
+    """Fasst aufeinanderfolgende Editor-Segmente desselben Projekts (+ Branch) zusammen.
+
+    Für die Standardansicht: statt „datei_a.py, datei_b.py, …“ nur der Projektname.
+    Nicht-Editor-Segmente bleiben unverändert.
+    """
+    out: list[Segment] = []
+    prev_key = None
+    for s in segments:
+        editor = s.state == "active" and classify.is_code_editor(s.process, config)
+        if editor:
+            if "/" in s.document:                       # neues Format "Projekt/pfad/datei"
+                project = s.document.split("/", 1)[0].strip()
+            else:                                        # nur Dateiname -> Projekt aus dem Titel
+                project = classify.project_name(s.title, s.process) or s.document
+            key = (s.app, project, s.branch, s.day)
+        else:
+            key = None
+
+        if (key is not None and key == prev_key and out
+                and s.start_utc - out[-1].end_utc <= 2.0):
+            out[-1].end_utc = s.end_utc
+        else:
+            seg = copy(s)
+            if editor:
+                seg.document = project
+                seg.title = project + (f" [{s.branch}]" if s.branch else "")
+            out.append(seg)
+        prev_key = key
+    return out
 
 
 def last_n_days(n: int) -> list[str]:
@@ -90,7 +129,8 @@ def summarize(segments: list[Segment], config: Config | None = None) -> dict:
 
     by_app: dict[str, float] = defaultdict(float)
     by_category: dict[str, float] = defaultdict(float)
-    by_document: dict[tuple[str, str], float] = defaultdict(float)
+    by_document: dict[tuple[str, str, str], float] = defaultdict(float)
+    doc_category: dict[tuple[str, str, str], str] = {}
     by_day: dict[str, dict[str, float]] = defaultdict(lambda: {"active": 0.0, "idle": 0.0, "locked": 0.0})
 
     for s in segments:
@@ -99,7 +139,9 @@ def summarize(segments: list[Segment], config: Config | None = None) -> dict:
         by_app[s.app or s.process or "Unbekannt"] += s.duration
         by_category[s.category or "Sonstiges"] += s.duration
         if s.document:
-            by_document[(s.app, s.document)] += s.duration
+            dk = (s.app, s.document, s.branch)
+            by_document[dk] += s.duration
+            doc_category.setdefault(dk, s.category or "Sonstiges")
 
     def rank(d: dict, key_fmt=lambda k: k):
         items = sorted(d.items(), key=lambda kv: kv[1], reverse=True)
@@ -142,8 +184,9 @@ def summarize(segments: list[Segment], config: Config | None = None) -> dict:
         "by_app": rank(by_app),
         "by_category": rank(by_category),
         "by_document": [
-            {"app": a, "document": d, "seconds": v, "pct": _pct(v, total_active)}
-            for (a, d), v in sorted(by_document.items(), key=lambda kv: kv[1], reverse=True)
+            {"app": a, "document": d, "branch": b, "category": doc_category.get((a, d, b), ""),
+             "seconds": v, "pct": _pct(v, total_active)}
+            for (a, d, b), v in sorted(by_document.items(), key=lambda kv: kv[1], reverse=True)
         ],
         "by_day": dict(by_day),
         "longest_focus": longest_focus,
@@ -182,8 +225,9 @@ def timeline(segments: list[Segment], include_states=("active", "idle", "locked"
             continue
         out.append(
             {
-                "start": s.start_dt.strftime("%H:%M:%S"),
-                "end": s.end_dt.strftime("%H:%M:%S"),
+                "date": s.start_dt.strftime("%d.%m.%Y"),
+                "start": s.start_dt.strftime("%H:%M"),
+                "end": s.end_dt.strftime("%H:%M"),
                 "start_iso": s.start_dt.isoformat(timespec="seconds"),
                 "end_iso": s.end_dt.isoformat(timespec="seconds"),
                 "duration": s.duration,
@@ -191,6 +235,7 @@ def timeline(segments: list[Segment], include_states=("active", "idle", "locked"
                 "app": s.app,
                 "window": s.document or s.title,
                 "title": s.title,
+                "branch": s.branch,
                 "category": s.category,
                 "state": labels.get(s.state, s.state),
             }
@@ -204,7 +249,7 @@ def export_csv(segments: list[Segment]) -> str:
     writer = csv.writer(buf, delimiter=";")
     writer.writerow(
         ["Datum", "Von", "Bis", "Dauer (s)", "Dauer", "Status", "App", "Prozess",
-         "Fenster/Datei", "Fenstertitel", "Kategorie"]
+         "Fenster/Datei", "Branch", "Fenstertitel", "Kategorie"]
     )
     for s in segments:
         writer.writerow(
@@ -218,6 +263,7 @@ def export_csv(segments: list[Segment]) -> str:
                 s.app,
                 s.process,
                 s.document,
+                s.branch,
                 s.title,
                 s.category,
             ]

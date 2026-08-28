@@ -1,4 +1,4 @@
-"""Einstellungs-Dialog – bearbeitet alle Optionen aus ``config.json`` als Formular."""
+"""Einstellungen als Panel (Tab) im Hauptfenster – kein eigenes Fenster."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,6 @@ import logging
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import theme
 from .config import DEFAULTS, Config
 
 log = logging.getLogger(__name__)
@@ -16,11 +15,12 @@ log = logging.getLogger(__name__)
 #   Art:  bool | int | float | choice | lines | json
 _SPEC: list[tuple] = [
     ("Erfassung", "poll_interval_seconds", "Abtastintervall (Sekunden)", "int", (1, 60),
-     "Wie oft das aktive Fenster geprüft wird. Kleiner = genauer, minimal mehr CPU. Wirkt sofort."),
+     "Fester Takt, in dem das aktive Fenster geprüft wird (Standard 3s)."),
     ("Erfassung", "idle_threshold_seconds", "Als „abwesend“ zählen ab (Sekunden ohne Eingabe)", "int", (10, 7200),
      "Bis dahin wird die Zeit weiter der App zugerechnet, danach als „Abwesend“."),
-    ("Erfassung", "min_segment_seconds", "Kürzeste erfasste Dauer (Sekunden)", "int", (0, 120),
-     "Einträge kürzer als dieser Wert werden verworfen (schnelles Durchklicken)."),
+    ("Erfassung", "min_segment_seconds", "Kürzeste erfasste Dauer (Sekunden)", "int", (0, 600),
+     "Einträge, die kürzer sind, werden nicht gespeichert. Bei Standard (3 s Takt) meist ohne "
+     "Wirkung – höher stellen (z. B. 30), um kurze Blicke auf andere Fenster auszublenden."),
     ("Erfassung", "track_titles", "Fenstertitel und Dateinamen speichern", "bool", None,
      "Aus: es wird nur der Programmname erfasst, kein Titel/keine Datei."),
 
@@ -31,6 +31,12 @@ _SPEC: list[tuple] = [
     ("Daten & Anzeige", "theme", "Design", "choice",
      [("System (Windows)", "system"), ("Hell", "light"), ("Dunkel", "dark")],
      "„System“ folgt der Hell/Dunkel-Einstellung von Windows."),
+    ("Daten & Anzeige", "developer_mode", "Entwicklermodus (zeigt zusätzlich Branches an)", "bool", None,
+     "Blendet in „Verlauf“ und „Dateien / Fenster“ eine Spalte mit dem Git-Branch ein."),
+    ("Daten & Anzeige", "project_roots", "Projekt-Ordner (einer pro Zeile) – für die Branch-Anzeige", "lines", None,
+     "Eltern-Ordner deiner Git-Projekte, z. B. „C:\\Programmieren“. VS Code / Explorer zeigen den "
+     "Branch nicht im Titel – TimeTracker liest ihn dann aus <Ordner>\\<Projekt>\\.git\\HEAD. "
+     "(Alternativ in VS Code: window.title um ${activeRepositoryBranchName} ergänzen.)"),
 
     ("Autostart", "autostart", "TimeTracker mit Windows starten", "bool", None,
      "Trägt einen Eintrag im Autostart des aktuellen Benutzers ein (HKCU…\\Run)."),
@@ -47,6 +53,8 @@ _SPEC: list[tuple] = [
 
     ("Erweitert", "app_names", "Eigene Anzeigenamen  (JSON-Objekt)", "json", dict,
      'Prozessname → Anzeigename.  Beispiel:  {"meinprog.exe": "Mein Programm"}'),
+    ("Erweitert", "app_colors", "Eigene App-Farben  (JSON-Objekt)", "json", dict,
+     'Bequemer über den Apps-Tab (✎).  Beispiel:  {"Visual Studio Code": "#2563eb"}'),
     ("Erweitert", "categories", "Kategorie-Regeln  (JSON-Liste)", "json", list,
      'Leere Liste = interne Vorgaben.  '
      '[{"category": "Meine Firma", "processes": ["sap.exe"], "title_patterns": ["JIRA"]}]'),
@@ -55,9 +63,10 @@ _SPEC: list[tuple] = [
 ]
 
 
-class SettingsDialog(tk.Toplevel):
-    def __init__(self, parent: tk.Misc, config: Config, palette: dict,
-                 on_saved=None, on_close=None):
+class SettingsPanel(ttk.Frame):
+    """Scrollbares Formular für alle ``config.json``-Optionen – lebt als Tab im Dashboard."""
+
+    def __init__(self, parent: tk.Misc, config: Config, palette: dict, on_saved=None, on_close=None):
         super().__init__(parent)
         self.config = config
         self.pal = palette
@@ -65,99 +74,92 @@ class SettingsDialog(tk.Toplevel):
         self.on_close = on_close
         self._vars: dict[str, object] = {}
         self._widgets: dict[str, tk.Widget] = {}
-
-        self.title("TimeTracker – Einstellungen")
-        self.configure(bg=palette["bg"])
-        self.transient(parent)
-        self.resizable(False, False)
-        self._mode = "dark" if palette is theme.PALETTES["dark"] else "light"
         self._build()
-        theme.set_titlebar(self, self._mode)
 
-        self.bind("<Escape>", lambda _e: self._close())
-        self.protocol("WM_DELETE_WINDOW", self._close)
-        self.update_idletasks()
-        self.geometry(f"+{parent.winfo_rootx() + 60}+{parent.winfo_rooty() + 30}")
-        self.grab_set()
-        self.focus_set()
-
-    # -- Aufbau ---------------------------------------------------------
+    # -- Aufbau -------------------------------------------------------
     def _build(self) -> None:
-        nb = ttk.Notebook(self)
-        nb.pack(fill="both", expand=True, padx=10, pady=10)
-
-        frames: dict[str, ttk.Frame] = {}
-        for section, key, label, kind, extra, helptext in _SPEC:
-            frame = frames.get(section)
-            if frame is None:
-                frame = ttk.Frame(nb, padding=14)
-                frame.columnconfigure(0, weight=1)
-                frame._row = 0  # type: ignore[attr-defined]
-                nb.add(frame, text=f"  {section}  ")
-                frames[section] = frame
-            self._add_field(frame, key, label, kind, extra, helptext)
-
-        btns = ttk.Frame(self)
-        btns.pack(fill="x", padx=10, pady=(0, 10))
+        btns = ttk.Frame(self, padding=(10, 8))
+        btns.pack(fill="x", side="bottom")
         ttk.Button(btns, text="Auf Standard zurücksetzen", command=self._reset).pack(side="left")
-        ttk.Button(btns, text="Speichern", style="Accent.TButton",
-                   command=self._save).pack(side="right")
-        ttk.Button(btns, text="Abbrechen", command=self._close).pack(side="right", padx=6)
+        ttk.Button(btns, text="Speichern", style="Accent.TButton", command=self._save).pack(side="right")
+        ttk.Button(btns, text="Verwerfen", command=self._revert).pack(side="right", padx=6)
+
+        canvas = tk.Canvas(self, bg=self.pal["bg"], highlightthickness=0)
+        sb = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        form = ttk.Frame(canvas, padding=(14, 10))
+        form.columnconfigure(0, weight=1)
+        window = canvas.create_window((0, 0), window=form, anchor="nw")
+        form.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(window, width=e.width))
+
+        def _wheel(event):
+            canvas.yview_scroll(int(-event.delta / 120), "units")
+
+        canvas.bind("<Enter>", lambda e: canvas.bind_all("<MouseWheel>", _wheel))
+        canvas.bind("<Leave>", lambda e: canvas.unbind_all("<MouseWheel>"))
+
+        row = 0
+        last_section = None
+        for section, key, label, kind, extra, helptext in _SPEC:
+            if section != last_section:
+                ttk.Label(form, text=section, font=("Segoe UI Semibold", 11),
+                          foreground=self.pal["accent"]).grid(
+                    row=row, column=0, sticky="w", pady=(16 if last_section else 2, 2), columnspan=2)
+                row += 1
+                last_section = section
+            row = self._add_field(form, row, key, label, kind, extra, helptext)
 
     def _text_widget(self, parent, height: int) -> tk.Text:
-        return tk.Text(parent, height=height, width=58, font=("Consolas", 9), wrap="none",
+        return tk.Text(parent, height=height, width=54, font=("Consolas", 9), wrap="none",
                        bg=self.pal["surface"], fg=self.pal["text"],
                        insertbackground=self.pal["text"],
                        selectbackground=self.pal["sel_bg"], selectforeground=self.pal["sel_fg"],
                        relief="solid", borderwidth=1, highlightthickness=0)
 
-    def _add_field(self, parent, key, label, kind, extra, helptext) -> None:
-        row = parent._row  # type: ignore[attr-defined]
+    def _add_field(self, parent, row, key, label, kind, extra, helptext) -> int:
         ttk.Label(parent, text=label, font=("Segoe UI Semibold", 9)).grid(
-            row=row, column=0, sticky="w", pady=(10, 2), columnspan=2)
-
+            row=row, column=0, sticky="w", pady=(8, 2), columnspan=2)
+        row += 1
         cur = self.config.get(key, DEFAULTS.get(key))
         var: object = None
 
         if kind == "bool":
             var = tk.BooleanVar(value=bool(cur))
             ttk.Checkbutton(parent, variable=var, text="aktiviert").grid(
-                row=row + 1, column=0, sticky="w", columnspan=2)
+                row=row, column=0, sticky="w", columnspan=2)
         elif kind in ("int", "float"):
             lo, hi = extra
             var = tk.StringVar(value=str(cur))
             ttk.Spinbox(parent, from_=lo, to=hi, textvariable=var, width=16,
                         font=("Segoe UI", 10),
-                        increment=(0.5 if kind == "float" else 1)).grid(
-                row=row + 1, column=0, sticky="w")
+                        increment=(0.5 if kind == "float" else 1)).grid(row=row, column=0, sticky="w")
         elif kind == "choice":
             labels = [lbl for lbl, _ in extra]
-            mapping = {lbl: val for lbl, val in extra}
-            current_label = next((lbl for lbl, val in extra if val == cur), labels[0])
-            var = tk.StringVar(value=current_label)
-            var._map = mapping  # type: ignore[attr-defined]
+            var = tk.StringVar(value=next((lbl for lbl, val in extra if val == cur), labels[0]))
+            var._map = {lbl: val for lbl, val in extra}  # type: ignore[attr-defined]
             ttk.Combobox(parent, values=labels, textvariable=var, state="readonly",
-                         width=22).grid(row=row + 1, column=0, sticky="w")
-        elif kind == "lines":
-            widget = self._text_widget(parent, 5)
-            widget.insert("1.0", "\n".join(cur or []))
-            widget.grid(row=row + 1, column=0, sticky="we", columnspan=2)
-            self._widgets[key] = widget
-        elif kind == "json":
-            widget = self._text_widget(parent, 8)
-            widget.insert("1.0", json.dumps(cur, indent=2, ensure_ascii=False))
-            widget.grid(row=row + 1, column=0, sticky="we", columnspan=2)
+                         width=22).grid(row=row, column=0, sticky="w")
+        elif kind in ("lines", "json"):
+            widget = self._text_widget(parent, 5 if kind == "lines" else 6)
+            widget.insert("1.0", "\n".join(cur or []) if kind == "lines"
+                          else json.dumps(cur, indent=2, ensure_ascii=False))
+            widget.grid(row=row, column=0, sticky="we", columnspan=2)
             self._widgets[key] = widget
 
+        row += 1
         if helptext:
             ttk.Label(parent, text=helptext, style="Hint.TLabel",
-                      wraplength=520, justify="left").grid(
-                row=row + 2, column=0, sticky="w", columnspan=2, pady=(2, 0))
-
+                      wraplength=560, justify="left").grid(
+                row=row, column=0, sticky="w", columnspan=2, pady=(2, 0))
+            row += 1
         self._vars[key] = var
-        parent._row = row + 3  # type: ignore[attr-defined]
+        return row
 
-    # -- Speichern ----------------------------------------------------
+    # -- Werte einsammeln / speichern -------------------------------
     def _collect(self) -> dict | None:
         out: dict = {}
         for section, key, label, kind, extra, helptext in _SPEC:
@@ -196,10 +198,8 @@ class SettingsDialog(tk.Toplevel):
             return
         self.config.data.update(data)
         self.config.save()
-        cb = self.on_saved
-        self._teardown()
-        if cb:
-            cb(data)
+        if self.on_saved:
+            self.on_saved(data)
 
     def _reset(self) -> None:
         if not messagebox.askyesno(
@@ -209,23 +209,25 @@ class SettingsDialog(tk.Toplevel):
         for key in self._vars:
             self.config.data[key] = json.loads(json.dumps(DEFAULTS.get(key)))
         self.config.save()
-        cb = self.on_saved
-        self._teardown()
-        if cb:
-            cb(dict(self.config.data))
+        if self.on_saved:
+            self.on_saved(dict(self.config.data))
 
-    def _close(self) -> None:
-        cb = self.on_close
-        self._teardown()
-        if cb:
-            cb()
-
-    def _teardown(self) -> None:
-        try:
-            self.grab_release()
-        except tk.TclError:
-            pass
-        try:
-            self.destroy()
-        except tk.TclError:
-            pass
+    def _revert(self) -> None:
+        """Formular wieder auf die gespeicherten Werte setzen."""
+        for section, key, label, kind, extra, helptext in _SPEC:
+            cur = self.config.get(key, DEFAULTS.get(key))
+            if kind == "bool":
+                self._vars[key].set(bool(cur))  # type: ignore[union-attr]
+            elif kind in ("int", "float"):
+                self._vars[key].set(str(cur))  # type: ignore[union-attr]
+            elif kind == "choice":
+                var = self._vars[key]
+                inv = {v: k for k, v in var._map.items()}  # type: ignore[attr-defined]
+                var.set(inv.get(cur, next(iter(var._map))))  # type: ignore[union-attr]
+            elif kind in ("lines", "json"):
+                w = self._widgets[key]
+                w.delete("1.0", "end")
+                w.insert("1.0", "\n".join(cur or []) if kind == "lines"
+                         else json.dumps(cur, indent=2, ensure_ascii=False))
+        if self.on_close:
+            self.on_close()

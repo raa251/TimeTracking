@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS segments (
     app         TEXT    NOT NULL DEFAULT '',
     title       TEXT    NOT NULL DEFAULT '',
     document    TEXT    NOT NULL DEFAULT '',
-    category    TEXT    NOT NULL DEFAULT ''
+    category    TEXT    NOT NULL DEFAULT '',
+    branch      TEXT    NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_segments_day   ON segments(day);
 CREATE INDEX IF NOT EXISTS idx_segments_start ON segments(start_utc);
@@ -42,6 +43,14 @@ class Database:
         self._local = threading.local()
         with self._connect() as conn:
             conn.executescript(SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Fehlende Spalten in bestehenden Datenbanken ergänzen."""
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(segments)")}
+        if "branch" not in cols:
+            conn.execute("ALTER TABLE segments ADD COLUMN branch TEXT NOT NULL DEFAULT ''")
 
     # -- Verbindungshandling (eine Connection pro Thread) -------------------
     def _connect(self) -> sqlite3.Connection:
@@ -73,12 +82,13 @@ class Database:
         title: str = "",
         document: str = "",
         category: str = "",
+        branch: str = "",
     ) -> int:
         cur = self._connect().execute(
             """INSERT INTO segments
-               (start_utc, end_utc, day, state, process, exe_path, app, title, document, category)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (start_utc, start_utc, day, state, process, exe_path, app, title, document, category),
+               (start_utc, end_utc, day, state, process, exe_path, app, title, document, category, branch)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (start_utc, start_utc, day, state, process, exe_path, app, title, document, category, branch),
         )
         return int(cur.lastrowid)
 

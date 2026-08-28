@@ -10,9 +10,11 @@ Alle Daten bleiben **lokal** auf dem Rechner. Kein Netzwerk, kein Konto.
 
 ![Wochenübersicht](docs/dashboard_woche.png)
 
-![Verlaufs-Log im Dunkelmodus](docs/dashboard_dark_verlauf.png)
+![Verlaufs-Log im Dunkelmodus mit Branch-Spalte](docs/dashboard_dark_verlauf.png)
 
-![Einstellungen](docs/settings_dark.png)
+![Apps mit eigenen Farben](docs/dashboard_dark_apps.png)
+
+![Einstellungen als Tab](docs/settings_dark.png)
 
 *(Die Screenshots zeigen Demo-Daten.)*
 
@@ -23,8 +25,12 @@ Alle Daten bleiben **lokal** auf dem Rechner. Kein Netzwerk, kein Konto.
 | Bereich | Details |
 |---|---|
 | **Automatisches Tracking** | Aktives Fenster per Win32-API; Programmname wird zu lesbarem Namen aufgelöst (`Code.exe` → *Visual Studio Code*). |
-| **Datei-/Fensterunterscheidung** | Aus dem Fenstertitel wird die konkrete Datei / Seite herausgelöst (`main.py`, Browser-Tab-Titel, Word-Dokument …). |
-| **Gesamtdauer & Log** | Pro Tag und über 7 Tage: aktive Gesamtzeit, plus chronologisches Log „von–bis, welche App, welches Fenster, welche Kategorie, welcher Status“. |
+| **Datei-/Fensterunterscheidung** | Aus dem Fenstertitel wird die konkrete Datei / Seite herausgelöst (Browser-Tab-Titel, Word-Dokument …). |
+| **Feste Taktung** | Das aktive Fenster wird alle `poll_interval_seconds` (Standard **3 s**) geprüft – nicht ereignisgesteuert. In den Einstellungen änderbar. |
+| **Editor = Projekt** | VS Code, Cursor, JetBrains … werden in der Standardansicht pro **Projekt/Ordner** zusammengefasst (übersichtlicher). Der Haken **„Detailansicht (pro Datei)“** in *Verlauf* / *Dateien* zeigt jederzeit die Einzeldateien. Browser-Tabs bleiben immer einzeln. |
+| **Entwicklermodus** | Optional: Spalte **Branch** in *Verlauf* und *Dateien / Fenster*. Der Branch kommt aus dem Fenstertitel (`[main]`, `(main)`) oder – über `project_roots` – aus `.git/HEAD`. |
+| **App-Farben** | Eigene Farbe je App über den *Apps*-Tab (Klick auf **✎**); überschreibt die Kategorie-Farbe in allen Tabellen. |
+| **Gesamtdauer & Log** | Pro Tag und über 7 Tage: aktive Gesamtzeit, plus chronologisches Log „Datum, von–bis, welche App, welches Fenster, welche Kategorie, welcher Status“ – neueste zuerst. |
 | **Letzte 7 Tage** | Immer verfügbar (Standard-Aufbewahrung sogar 90 Tage). |
 | **Leerlauf-Erkennung** | Ab 120 s ohne Eingabe wird „Abwesend“ statt der App gezählt; der Wechselzeitpunkt wird auf die letzte echte Eingabe zurückdatiert. |
 | **Sperrbildschirm** | Gesperrte Sitzung wird als eigener Status „Gesperrt“ erfasst. |
@@ -32,8 +38,8 @@ Alle Daten bleiben **lokal** auf dem Rechner. Kein Netzwerk, kein Konto.
 | **Produktivitäts-Score** | Grobe Einordnung produktiv / neutral / ablenkend je Kategorie. |
 | **Kennzahlen** | Längster ununterbrochener Fokus, Anzahl App-Wechsel, erste/letzte Aktivität, Tagesziel-Fortschritt. |
 | **Diagramme** | Balken je Wochentag bzw. je Stunde des gewählten Tages. |
-| **Hell / Dunkel** | Umschaltbar im Dashboard oder in den Einstellungen; „System“ folgt der Windows-Einstellung (inkl. Titelleiste). |
-| **Einstellungs-Fenster** | Alle Optionen aus `config.json` per Formular editierbar – kein Editieren der Datei nötig. |
+| **Hell / Dunkel** | In den Einstellungen (`Daten & Anzeige → Design`); „System“ folgt der Windows-Einstellung, inkl. Titelleiste. |
+| **Einstellungen im Fenster** | Eigener Tab **Einstellungen** – alle Optionen aus `config.json` als Formular, kein Editieren der Datei und kein separates Fenster. |
 | **Kopieren** | Tabellenzeilen per Strg+C / Rechtsklick als Tabulator-Text (Excel) in die Zwischenablage. |
 | **Datenschutz** | „Private“ Programme (z. B. Passwort-Manager) und Titel-Muster (z. B. *Passwort*, *Banking*) werden ohne Details gespeichert. |
 | **Export** | CSV (`;`-getrennt, Excel-tauglich) und JSON, jeweils Tag oder 7-Tage-Zeitraum. |
@@ -78,17 +84,19 @@ Im Tray-Menü:
 * **Datenordner öffnen**
 * **Beenden**
 
-Im Dashboard (Tabs *Übersicht · Apps · Verlauf · Dateien*):
+Im Dashboard (Tabs *Übersicht · Apps · Verlauf · Dateien / Fenster · Einstellungen*):
 
-* **Einstellungen** – Button rechts in der Werkzeugleiste: alle `config.json`-Optionen
-  als Formular. Änderungen wirken sofort (Poll-Intervall, Filter, Kategorien, Design …).
-* **Dunkelmodus / Hellmodus** – Button daneben schaltet direkt um; dauerhaft über
-  *Einstellungen → Daten & Anzeige → Design* (`System` folgt Windows).
+* **Einstellungen** – eigener Tab: alle `config.json`-Optionen als Formular,
+  Änderungen wirken sofort (*Tray → Einstellungen …* springt ebenfalls dorthin).
+* **Verlauf / Dateien**: Haken **„Detailansicht (pro Datei)“** schaltet zwischen
+  Projekt-Zusammenfassung und Einzeldateien um (mit Pfad ab dem Projektordner).
+* **Verlauf**: neueste Einträge oben; Klick auf einen Spaltenkopf sortiert danach
+  (nochmal klicken kehrt um).
+* **Apps**: Klick auf **✎** öffnet die Farbwahl für die App.
 * Zeilen markieren (mehrere mit Shift/Strg, alle mit **Strg+A**) und mit **Strg+C**
   oder **Rechtsklick → Kopieren** in die Zwischenablage holen – tabulatorgetrennt,
   direkt in Excel einfügbar. Im *Verlauf* wird dabei der **vollständige** Fenstertitel
   kopiert, nicht die gekürzte Anzeige.
-* Spaltenkopf anklicken sortiert.
 
 ---
 
@@ -155,15 +163,20 @@ Alles unter `%LOCALAPPDATA%\TimeTracker\`:
 
 ### `config.json` – wichtigste Optionen
 
-Am bequemsten über **Tray → Einstellungen …** bzw. den **Einstellungen**-Button im
-Dashboard; die Datei kann aber auch direkt bearbeitet werden.
+Am bequemsten über den **Einstellungen**-Tab im Dashboard (oder **Tray → Einstellungen …**);
+die Datei kann aber auch direkt bearbeitet werden.
 
 | Schlüssel | Standard | Bedeutung |
 |---|---|---|
-| `poll_interval_seconds` | `3` | Abtastintervall |
+| `poll_interval_seconds` | `3` | Fester Prüf-Takt fürs aktive Fenster (nicht ereignisgesteuert) |
 | `idle_threshold_seconds` | `120` | Ab wann „Abwesend“ |
 | `retention_days` | `90` | Aufbewahrung (min. 7) |
 | `track_titles` | `true` | Fenstertitel/Dateien speichern |
+| `collapse_editor_projects` | `true` | Merkt sich den „Detailansicht“-Haken (aus = pro Projekt) |
+| `editor_processes` | `[]` | zusätzliche Editoren/IDEs für die Projekt-Gruppierung |
+| `project_roots` | `[]` | Eltern-Ordner der Git-Projekte – speist die Branch-Anzeige aus `.git/HEAD` |
+| `developer_mode` | `false` | Branch-Spalte in Verlauf / Dateien einblenden |
+| `app_colors` | `{}` | Eigene Farbe je App: `{"Visual Studio Code": "#2563eb"}` (Apps-Tab → ✎) |
 | `idle_goal_hours` | `6.0` | Tagesziel „aktive Zeit“ |
 | `theme` | `"system"` | `"system"` \| `"light"` \| `"dark"` |
 | `private_processes` | Passwort-Manager | Keine Details speichern |
@@ -187,11 +200,12 @@ Beispiel für eine eigene Kategorie-Regel:
 ## Datenmodell
 
 Tabelle `segments` – ein Eintrag pro zusammenhängendem Zeitraum mit gleichem
-Fenster **und** gleichem Status:
+Fenster(titel) **und** gleichem Status. Es wird **pro Datei/Tab** gespeichert;
+das Zusammenfassen zu „Projekt“ passiert erst bei der Anzeige.
 
 ```
 id, start_utc, end_utc, day, state (active|idle|locked),
-process, exe_path, app, title, document, category
+process, exe_path, app, title, document, category, branch
 ```
 
 ---
@@ -201,13 +215,13 @@ process, exe_path, app, title, document, category
 ```
 timetracker/
   winapi.py           ctypes-Wrapper: aktives Fenster, Leerlauf, Sperre
-  classify.py         Prozess → Anzeigename, Titel → Datei, Kategorie, Datenschutz
-  database.py         SQLite (WAL, eine Verbindung pro Thread)
-  tracker.py          Hintergrund-Thread: pollt & schreibt Segmente
-  reporting.py        Aggregation, Verlauf, CSV/JSON-Export, Klartext-Bericht
-  dashboard.py        Tkinter-Fenster (Kennzahlen, Diagramme, Tabellen, Copy)
+  classify.py         Prozess → Anzeigename, Titel → Datei/Projekt/Branch, Kategorie, Filter
+  database.py         SQLite (WAL, eine Verbindung pro Thread, Spalten-Migration)
+  tracker.py          Hintergrund-Thread: pollt & schreibt Segmente (pro Datei)
+  reporting.py        Aggregation, Verlauf, Projekt-Collapse, CSV/JSON-Export
+  dashboard.py        Tkinter-Fenster (Kennzahlen, Diagramme, Tabellen, Copy, App-Farben)
   theme.py            Hell-/Dunkel-Paletten + ttk-Styling + Titelleisten-Farbe
-  settings.py         Einstellungs-Dialog (Formular für alle config.json-Optionen)
+  settings.py         Einstellungen-Panel (Formular-Tab für alle config.json-Optionen)
   tray.py             pystray-Icon + Menü (+ .ico-Erzeugung für den Build)
   autostart.py        HKCU\...\Run  (erkennt gebündelte .exe)
   single_instance.py  Named Mutex – nur eine Instanz gleichzeitig

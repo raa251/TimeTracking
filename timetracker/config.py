@@ -162,6 +162,12 @@ DEFAULTS: dict = {
     "min_segment_seconds": 1,
     "track_titles": True,
     "autostart": False,
+    # Standardansicht (= "Detailansicht"-Haken aus): Editoren pro Projekt zusammenfassen.
+    "collapse_editor_projects": True,
+    "editor_processes": [],   # zusätzliche Editoren/IDEs (ergänzt die eingebaute Liste)
+    # Eltern-Ordner der Git-Projekte – ermöglicht die Branch-Anzeige, wenn der
+    # Fenstertitel den Branch nicht enthält (Branch wird aus .git/HEAD gelesen).
+    "project_roots": [],
     # Datenschutz: für diese Prozesse/Titel werden keine Details gespeichert.
     "private_processes": ["keepass.exe", "keepassxc.exe", "1password.exe", "bitwarden.exe"],
     "private_title_patterns": ["passwort", "password", "banking", "\\bTAN\\b"],
@@ -173,10 +179,12 @@ DEFAULTS: dict = {
     ],
     "ignore_title_patterns": ["Überlauffenster der Taskleiste", "Task-Umschalten", "Task Switching"],
     "app_names": {},          # überschreibt/ergänzt DEFAULT_APP_NAMES
+    "app_colors": {},         # {"Visual Studio Code": "#2563eb"} – eigene Farbe je App
     "categories": [],         # ersetzt DEFAULT_CATEGORIES, wenn nicht leer
     "productivity": {},       # überschreibt/ergänzt DEFAULT_PRODUCTIVITY
     "idle_goal_hours": 6.0,   # Tagesziel "aktive Zeit" für die Fortschrittsanzeige
     "theme": "system",        # "system" | "light" | "dark"
+    "developer_mode": False,  # zeigt zusätzlich die Git-Branch-Spalte
 }
 
 
@@ -205,6 +213,10 @@ class Config:
         merged = dict(DEFAULT_APP_NAMES)
         merged.update({k.lower(): v for k, v in self.data.get("app_names", {}).items()})
         return merged
+
+    @property
+    def app_colors(self) -> dict[str, str]:
+        return dict(self.data.get("app_colors", {}))
 
     @property
     def categories(self) -> list[dict]:

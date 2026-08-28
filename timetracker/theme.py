@@ -145,12 +145,14 @@ def apply(style: ttk.Style, root: tk.Misc, mode: str) -> dict[str, str]:
                     arrowcolor=p["text"], bordercolor=p["border"])
     style.configure("TEntry", fieldbackground=p["surface"], foreground=p["text"],
                     bordercolor=p["border"])
-    style.configure("TNotebook", background=p["bg"], bordercolor=p["border"])
+    style.configure("TNotebook", background=p["bg"], bordercolor=p["border"], tabmargins=(2, 4, 2, 0))
     style.configure("TNotebook.Tab", background=p["surface_alt"], foreground=p["text_muted"],
-                    padding=(14, 6))
+                    padding=(14, 6), borderwidth=1)
     style.map("TNotebook.Tab",
               background=[("selected", p["bg"])],
-              foreground=[("selected", p["text"])])
+              foreground=[("selected", p["text"])],
+              padding=[("selected", (14, 6))],   # aktiver Tab gleich groß wie die übrigen
+              expand=[("selected", (0, 0, 0, 0))])
     style.configure("Treeview", background=p["surface"], fieldbackground=p["surface"],
                     foreground=p["text"], bordercolor=p["border"], rowheight=row_h,
                     font=("Segoe UI", 9))
