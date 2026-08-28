@@ -28,7 +28,7 @@ Alle Daten bleiben **lokal** auf dem Rechner. Kein Netzwerk, kein Konto.
 | **Datei-/Fensterunterscheidung** | Aus dem Fenstertitel wird die konkrete Datei / Seite herausgelöst (Browser-Tab-Titel, Word-Dokument …). |
 | **Feste Taktung** | Das aktive Fenster wird alle `poll_interval_seconds` (Standard **3 s**) geprüft – nicht ereignisgesteuert. In den Einstellungen änderbar. |
 | **Editor = Projekt** | VS Code, Cursor, JetBrains … werden in der Standardansicht pro **Projekt/Ordner** zusammengefasst (übersichtlicher). Der Haken **„Detailansicht (pro Datei)“** in *Verlauf* / *Dateien* zeigt jederzeit die Einzeldateien. Browser-Tabs bleiben immer einzeln. |
-| **Entwicklermodus** | Optional: Spalte **Branch** in *Verlauf* und *Dateien / Fenster*. Der Branch kommt aus dem Fenstertitel (`[main]`, `(main)`) oder – über `project_roots` – aus `.git/HEAD`. |
+| **Entwicklermodus** | Optional: Spalte **Branch** in *Verlauf* und *Dateien / Fenster*. Der Branch kommt **ausschließlich aus `.git/HEAD`** – die lokalen Repos werden beim Start automatisch gefunden. Zuordnung: über den Ordnernamen (VS Code, Explorer), über den vollen Pfad im Titel (Notepad++) oder – wenn der Titel nur den Dateinamen zeigt (MetaEditor) – durch Suche der Datei in den bekannten Repos. |
 | **App-Farben** | Eigene Farbe je App über den *Apps*-Tab (Klick auf **✎**); überschreibt die Kategorie-Farbe in allen Tabellen. |
 | **Gesamtdauer & Log** | Pro Tag und über 7 Tage: aktive Gesamtzeit, plus chronologisches Log „Datum, von–bis, welche App, welches Fenster, welche Kategorie, welcher Status“ – neueste zuerst. |
 | **Letzte 7 Tage** | Immer verfügbar (Standard-Aufbewahrung sogar 90 Tage). |
@@ -174,8 +174,8 @@ die Datei kann aber auch direkt bearbeitet werden.
 | `track_titles` | `true` | Fenstertitel/Dateien speichern |
 | `collapse_editor_projects` | `true` | Merkt sich den „Detailansicht“-Haken (aus = pro Projekt) |
 | `editor_processes` | `[]` | zusätzliche Editoren/IDEs für die Projekt-Gruppierung |
-| `project_roots` | `[]` | Eltern-Ordner der Git-Projekte – speist die Branch-Anzeige aus `.git/HEAD` |
-| `developer_mode` | `false` | Branch-Spalte in Verlauf / Dateien einblenden |
+| `developer_mode` | `false` | Branch-Spalte in Verlauf / Dateien einblenden (Repos werden automatisch gefunden) |
+| `project_roots` | `[]` | *optional* – zusätzliche Ordner für den Repo-Scan (normalerweise nicht nötig) |
 | `app_colors` | `{}` | Eigene Farbe je App: `{"Visual Studio Code": "#2563eb"}` (Apps-Tab → ✎) |
 | `idle_goal_hours` | `6.0` | Tagesziel „aktive Zeit“ |
 | `theme` | `"system"` | `"system"` \| `"light"` \| `"dark"` |
@@ -216,6 +216,7 @@ process, exe_path, app, title, document, category, branch
 timetracker/
   winapi.py           ctypes-Wrapper: aktives Fenster, Leerlauf, Sperre
   classify.py         Prozess → Anzeigename, Titel → Datei/Projekt/Branch, Kategorie, Filter
+  gitinfo.py          findet lokale Git-Repos, liest .git/HEAD (Branch-Anzeige)
   database.py         SQLite (WAL, eine Verbindung pro Thread, Spalten-Migration)
   tracker.py          Hintergrund-Thread: pollt & schreibt Segmente (pro Datei)
   reporting.py        Aggregation, Verlauf, Projekt-Collapse, CSV/JSON-Export

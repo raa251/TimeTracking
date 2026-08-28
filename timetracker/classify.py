@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from .config import Config
 
@@ -14,6 +13,7 @@ _BROWSERS = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe"
 _EDITORS = {
     "code.exe", "code - insiders.exe", "cursor.exe", "devenv.exe", "pycharm64.exe",
     "idea64.exe", "webstorm64.exe", "rider64.exe", "sublime_text.exe", "notepad++.exe",
+    "metaeditor64.exe", "metaeditor.exe",
 }
 
 # Editoren, deren Titel "<Datei> — <Projekt> — <App>" lautet (Projekt = vorletztes Feld).
@@ -27,57 +27,37 @@ _EDITORS_PROJECT_FIRST = {
     "goland64.exe", "datagrip64.exe", "rubymine64.exe", "rustrover64.exe",
     "studio64.exe", "android studio.exe",
 }
+# Editoren, deren Titel nur die Datei enthält (kein Projekt) – z. B. MetaEditor:
+# "MetaEditor - [MyEA.mq5]". Das Projekt wird über die Datei in den Repos gesucht.
+_EDITORS_FILE_ONLY = {"metaeditor64.exe", "metaeditor.exe"}
 _APP_LIKE_TAILS = {
     "visual studio code", "vs code", "cursor", "code - oss", "vscodium", "windsurf",
     "microsoft visual studio", "sublime text", "zed", "fleet",
+    "metaeditor", "metaeditor 5", "metatrader", "metatrader 5",
 }
 
-# Git-Branch im Fenstertitel: "[feature/login]", "(main)", "git:(main)", "⎇ main"
-_BRANCH_RE = re.compile(
-    r"(?:git:)?[\[(]([A-Za-z0-9][\w./\-]*)[\])]"     # [branch] / (branch) / git:(branch)
-    r"|⎇\s*([A-Za-z0-9][\w./\-]*)"                     # ⎇ branch
+# Nur ein abschließendes "[branch]" (branch-artig: keine Pfade, keine Leerzeichen)
+# wird vom Projektnamen entfernt. Der Branch selbst kommt NICHT aus dem Titel,
+# sondern aus .git/HEAD (führte bei manchen Apps zu falschen Werten).
+_BRANCH_TRAIL_RE = re.compile(r"\s*\[[A-Za-z][\w.\-]*(?:/[\w.\-]+)*\]\s*$")
+
+# absoluter Windows-Dateipfad im Fenstertitel (z. B. bei MetaEditor, Notepad++)
+_WINPATH_RE = re.compile(
+    r'[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)+[^\\/:*?"<>|\r\n]+?\.[A-Za-z0-9]{1,8}\b'
 )
-_BRANCH_DENY = {"administrator", "admin", "readonly", "read-only", "wsl", "ssh",
-                "dev container", "arbeitsbereich", "workspace"}
-_BRANCH_TRAIL_RE = re.compile(r"\s*[\[(][^\])]+[\])]\s*$")
 
 
-def branch_from_title(title: str) -> str:
-    """Git-Branch aus einem Fenstertitel, falls vorhanden (z. B. ``[main]``, ``(main)``)."""
+def path_from_title(title: str) -> str:
+    """Extrahiert einen absoluten Windows-Dateipfad aus dem Fenstertitel, falls vorhanden."""
     if not title:
         return ""
-    best = ""
-    for match in _BRANCH_RE.finditer(title):
-        cand = match.group(1) or match.group(2)
-        if not cand or cand.lower() in _BRANCH_DENY or cand.isdigit():
-            continue
-        best = cand  # letzten Treffer nehmen (steht meist beim Projekt)
-    return best
+    match = _WINPATH_RE.search(title)
+    return match.group(0).strip(' "') if match else ""
 
 
 def strip_branch(text: str) -> str:
-    """Entfernt einen abschließenden ``[branch]``/``(branch)``-Zusatz vom Text."""
+    """Entfernt ein abschließendes, branch-artiges ``[main]`` vom Text (Pfade bleiben)."""
     return _BRANCH_TRAIL_RE.sub("", text or "").strip()
-
-
-def branch_from_git(name: str, roots) -> str:
-    """Liest den Branch aus ``<root>/<name>/.git/HEAD`` – für Editoren/Explorer,
-    deren Titel den Branch nicht enthält. ``roots`` = Liste von Eltern-Ordnern."""
-    name = re.split(r"[\\/]", (name or "").strip().strip("[](){}"))[-1]
-    if not name:
-        return ""
-    for root in roots or []:
-        try:
-            head = Path(root).expanduser() / name / ".git" / "HEAD"
-            if not head.is_file():
-                continue
-            content = head.read_text(encoding="utf-8", errors="ignore").strip()
-            if content.startswith("ref:"):
-                return content.split("/", 2)[-1]
-            return content[:8]  # losgelöster HEAD -> Kurz-SHA
-        except OSError:
-            continue
-    return ""
 
 
 def friendly_app_name(process: str, config: Config) -> str:
@@ -123,19 +103,42 @@ def parse_document(title: str, process: str) -> str:
 
 
 def is_code_editor(process: str, config: Config) -> bool:
-    """True für Code-Editoren/IDEs (VS Code, Cursor, JetBrains …)."""
+    """True für Code-Editoren/IDEs (VS Code, Cursor, JetBrains, MetaEditor …)."""
     key = process.lower()
     extra = {p.lower() for p in config.get("editor_processes", [])}
-    return key in _EDITORS_PROJECT_LAST or key in _EDITORS_PROJECT_FIRST or key in extra
+    return (key in _EDITORS_PROJECT_LAST or key in _EDITORS_PROJECT_FIRST
+            or key in _EDITORS_FILE_ONLY or key in extra)
+
+
+def _debracket(part: str) -> str:
+    """Entfernt ein voll umschließendes ``[...]`` / ``(...)`` (MetaEditor-Titel)."""
+    part = part.strip()
+    if len(part) >= 2 and part[0] in "[(" and part[-1] in "])":
+        return part[1:-1].strip()
+    return part
 
 
 def _title_parts(title: str) -> list[str]:
     text = _LEAD_RE.sub("", title or "").strip()
-    return [p.strip() for p in _SPLIT_RE.split(text) if p.strip()]
+    return [_debracket(p.strip()) for p in _SPLIT_RE.split(text) if p.strip()]
+
+
+def _file_only_name(title: str, process: str) -> str:
+    """Dateiname aus einem "App - [datei]"- bzw. "App : [pfad\\datei]"-Titel (MetaEditor)."""
+    brackets = re.findall(r"\[([^\[\]]+)\]", title or "")
+    cand = brackets[-1].strip() if brackets else ""
+    if not cand:
+        parts = _title_parts(title)
+        stem = re.sub(r"\.exe$", "", process.lower())
+        rest = [p for p in parts if p.lower() not in _APP_LIKE_TAILS and p.lower() != stem]
+        cand = rest[-1] if rest else (parts[-1] if parts else "")
+    return _LEAD_RE.sub("", re.split(r"[\\/]", cand)[-1]).strip()
 
 
 def project_name(title: str, process: str) -> str:
     """Projekt-/Ordnername aus einem Editor-Fenstertitel (statt der einzelnen Datei)."""
+    if process.lower() in _EDITORS_FILE_ONLY:
+        return ""  # kein Projekt im Titel – wird über die Datei in den Repos gesucht
     parts = _title_parts(title)
     if len(parts) <= 1:
         return strip_branch(parts[0]) if parts else ""
@@ -152,6 +155,8 @@ def editor_document(title: str, process: str) -> str:
     Fällt auf ``<Projekt>/<Datei>`` bzw. nur den Dateinamen zurück, je nachdem
     wie viel der Fenstertitel hergibt.
     """
+    if process.lower() in _EDITORS_FILE_ONLY:
+        return _file_only_name(title, process)
     parts = _title_parts(title)
     if not parts:
         return ""

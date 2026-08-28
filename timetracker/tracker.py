@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, time as dtime
 
-from . import winapi
+from . import gitinfo, winapi
 from .classify import (
-    branch_from_git,
-    branch_from_title,
     categorize,
     editor_document,
     friendly_app_name,
@@ -17,6 +16,7 @@ from .classify import (
     is_ignored,
     is_private,
     parse_document,
+    path_from_title,
     project_name,
 )
 from .config import Config
@@ -31,6 +31,11 @@ STATE_LOCKED = "locked"
 
 def _midnight_epoch(dt: datetime) -> float:
     return datetime.combine(dt.date(), dtime.min).timestamp()
+
+
+def _looks_like_filename(text: str) -> bool:
+    """Sieht wie ein einzelner Dateiname aus (kein Pfad, mit Endung)?"""
+    return bool(text) and "/" not in text and "\\" not in text and "." in text[1:] and len(text) < 120
 
 
 class Tracker(threading.Thread):
@@ -51,7 +56,12 @@ class Tracker(threading.Thread):
         self._seg: dict | None = None          # aktuell offenes Segment
         self._last_purge = ""
         self._last_status = 0.0
-        self._branch_cache: dict[str, tuple[str, float]] = {}  # projekt -> (branch, geprüft_um)
+        self._repo_map: dict[str, str] = {}    # ordnername -> repo-pfad (Hintergrund-Scan)
+        self._repo_lock = threading.Lock()
+        self._branch_cache: dict[str, tuple[str, float]] = {}       # repo -> (branch, geprüft_um)
+        self._path_repo_cache: dict[str, tuple[str, str, float]] = {}  # ordner -> (repo, branch, um)
+        self._file_repo_cache: dict[str, tuple[str, str, float]] = {}  # datei -> (repo, rel, um)
+        self._last_repo_scan = 0.0
 
     # -- öffentliche Steuerung -------------------------------------------
     def stop(self) -> None:
@@ -75,15 +85,29 @@ class Tracker(threading.Thread):
     def paused(self) -> bool:
         return self._pause_event.is_set()
 
+    # -- Git-Repos im Hintergrund suchen -----------------------------
+    def _scan_repos(self) -> None:
+        try:
+            repos = gitinfo.discover_repos(self.config.get("project_roots", []))
+            with self._repo_lock:
+                self._repo_map = repos
+        except Exception:  # noqa: BLE001
+            log.exception("Repo-Scan fehlgeschlagen")
+
     # -- Thread-Lebenszyklus -------------------------------------------
     def run(self) -> None:
         log.info("Tracker gestartet (Intervall %ss)", self.config.get("poll_interval_seconds"))
         self._maybe_purge()
+        threading.Thread(target=self._scan_repos, name="RepoScan", daemon=True).start()
+        self._last_repo_scan = time.time()
         while not self._stop_event.is_set():
             try:
                 self._tick()
             except Exception:  # noqa: BLE001  – Loop darf nie sterben
                 log.exception("Fehler im Tracker-Tick")
+            if time.time() - self._last_repo_scan > 900:  # alle 15 min neue Repos suchen
+                self._last_repo_scan = time.time()
+                threading.Thread(target=self._scan_repos, name="RepoScan", daemon=True).start()
             # Intervall bei jedem Durchlauf neu lesen – Änderung wirkt ohne Neustart
             self._stop_event.wait(max(1, int(self.config.get("poll_interval_seconds", 3))))
         self._close_current(time.time())
@@ -145,13 +169,14 @@ class Tracker(threading.Thread):
             else:
                 app = friendly_app_name(process, self.config) if process else "Unbekannt"
                 category = categorize(process, title, self.config)
-                if is_code_editor(process, self.config):
+                editor = is_code_editor(process, self.config)
+                if editor:
                     document = editor_document(title, process)
                     project_hint = project_name(title, process)
                 else:
                     document = parse_document(title, process)
                     project_hint = document if process.lower() == "explorer.exe" else ""
-                branch = self._resolve_branch(raw_title, project_hint)
+                document, branch = self._git_context(raw_title, project_hint, document, editor)
             key = (state, process.lower(), title)
         else:
             app = "Abwesend" if state == STATE_IDLE else "Gesperrt"
@@ -184,20 +209,79 @@ class Tracker(threading.Thread):
         self._seg = {"id": seg_id, "key": key, "state": state, "day": today,
                      "start": boundary, "end": boundary}
 
-    def _resolve_branch(self, raw_title: str, project_hint: str) -> str:
-        branch = branch_from_title(raw_title)
-        if branch:
-            return branch
-        roots = self.config.get("project_roots", [])
-        if not roots or not project_hint:
-            return ""
+    def _head_cached(self, repo_dir: str) -> str:
         now = time.time()
-        cached = self._branch_cache.get(project_hint)
+        cached = self._branch_cache.get(repo_dir)
         if cached and now - cached[1] < 15:
             return cached[0]
-        branch = branch_from_git(project_hint, roots)
-        self._branch_cache[project_hint] = (branch, now)
+        branch = gitinfo.head_branch(repo_dir)
+        self._branch_cache[repo_dir] = (branch, now)
         return branch
+
+    def _git_context(self, raw_title: str, project_hint: str, doc_from_title: str,
+                     editor: bool) -> tuple[str, str]:
+        """Ermittelt (document, branch) über den echten Dateipfad bzw. den Ordnernamen.
+
+        Der Branch kommt ausschließlich aus ``.git/HEAD`` – nie aus dem Fenstertitel.
+        """
+        repo_dir = branch = ""
+
+        # 1. Voller Dateipfad im Titel (MetaEditor, Notepad++, …) -> .git aufwärts suchen
+        abs_path = path_from_title(raw_title)
+        if abs_path:
+            now = time.time()
+            folder = os.path.dirname(abs_path)
+            cached = self._path_repo_cache.get(folder)
+            if cached and now - cached[2] < 30:
+                repo_dir, branch = cached[0], cached[1]
+            else:
+                repo_dir, branch = gitinfo.repo_context(abs_path)
+                self._path_repo_cache[folder] = (repo_dir, branch, now)
+
+        # 2. Sonst über den Ordner-/Projektnamen aus dem gescannten Repo-Verzeichnis
+        if not repo_dir and project_hint:
+            with self._repo_lock:
+                repo_dir = self._repo_map.get(project_hint.strip().lower(), "")
+            if repo_dir:
+                branch = self._head_cached(repo_dir)
+
+        if repo_dir and abs_path:
+            proj = os.path.basename(repo_dir.rstrip("\\/"))
+            try:
+                rel = os.path.relpath(abs_path, repo_dir).replace("\\", "/")
+            except ValueError:
+                rel = os.path.basename(abs_path)
+            return f"{proj}/{rel}", branch
+        if abs_path and not repo_dir:
+            # Pfad ohne Repo -> auf die letzten zwei Komponenten kürzen
+            comps = [c for c in abs_path.replace("\\", "/").split("/") if c]
+            return ("/".join(comps[-2:]) if len(comps) >= 2 else doc_from_title), ""
+
+        # 3. Editor ohne Projekt/Pfad im Titel (MetaEditor): Datei in den Repos suchen
+        if not repo_dir and editor and _looks_like_filename(doc_from_title):
+            repo_dir, rel = self._find_file_repo(doc_from_title)
+            if repo_dir:
+                proj = os.path.basename(repo_dir.rstrip("\\/"))
+                return f"{proj}/{rel}", self._head_cached(repo_dir)
+
+        if repo_dir and not editor:
+            # z. B. Explorer in einem Repo: Projektname statt bloßem Ordnernamen
+            return os.path.basename(repo_dir.rstrip("\\/")), branch
+        return doc_from_title, branch
+
+    def _find_file_repo(self, filename: str) -> tuple[str, str]:
+        """(repo_dir, repo-relativer-pfad) für eine Datei, eindeutig in genau einem Repo."""
+        key = filename.strip().lower()
+        now = time.time()
+        cached = self._file_repo_cache.get(key)
+        if cached and now - cached[2] < 120:
+            return cached[0], cached[1]
+        with self._repo_lock:
+            repos = list(self._repo_map.values())
+        hits = gitinfo.find_file_in_repos(filename, repos)
+        repo_dir, rel = hits[0] if len(hits) == 1 else ("", "")
+        self._file_repo_cache[key] = (repo_dir, rel, now)
+        return repo_dir, rel
 
     def _close_current(self, end_utc: float) -> None:
         cur = self._seg

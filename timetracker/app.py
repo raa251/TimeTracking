@@ -54,8 +54,10 @@ class Application:
     # -- Start / Stop ------------------------------------------------
     def run(self) -> None:
         log.info("TimeTracker %s startet – Daten in %s", _version(), DATA_DIR)
-        if self.config.get("autostart") and not autostart.is_enabled():
-            autostart.enable()
+        if self.config.get("autostart"):
+            autostart.enable()  # idempotent; heilt einen veralteten Pfad nach dem Verschieben
+        elif autostart.is_enabled():
+            autostart.disable()  # Config sagt aus -> auch die Registry aufräumen
         self.tracker.start()
         try:
             self.tray.run()  # blockiert im Tray-Message-Loop (Hauptthread)

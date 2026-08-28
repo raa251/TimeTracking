@@ -64,11 +64,21 @@ class Dashboard:
         self._build_statusbar()
 
     def _rebuild(self) -> None:
-        """Kompletter Neuaufbau der Oberfläche (z. B. nach Theme-Wechsel)."""
+        """Kompletter Neuaufbau der Oberfläche (z. B. nach Theme-Wechsel).
+
+        Fenstergröße/-zustand (maximiert, Vollbild) bleiben erhalten.
+        """
         try:
             self._nb_tab = self._nb.index(self._nb.select())
         except Exception:  # noqa: BLE001
             pass
+        try:
+            win_state = self.root.state()
+            fullscreen = bool(self.root.attributes("-fullscreen"))
+            geometry = self.root.geometry()
+        except tk.TclError:
+            win_state, fullscreen, geometry = "normal", False, ""
+
         for widget in list(self.root.winfo_children()):
             widget.destroy()
         self._build_all()
@@ -76,10 +86,14 @@ class Dashboard:
             self._nb.select(self._nb_tab)
         except Exception:  # noqa: BLE001
             pass
-        # native Titelleiste live neu einfärben
+
         try:
-            self.root.withdraw()
-            self.root.deiconify()
+            if fullscreen:
+                self.root.attributes("-fullscreen", True)
+            elif win_state == "zoomed":
+                self.root.state("zoomed")
+            elif geometry:
+                self.root.geometry(geometry)
         except tk.TclError:
             pass
         self._refresh()

@@ -32,11 +32,8 @@ _SPEC: list[tuple] = [
      [("System (Windows)", "system"), ("Hell", "light"), ("Dunkel", "dark")],
      "„System“ folgt der Hell/Dunkel-Einstellung von Windows."),
     ("Daten & Anzeige", "developer_mode", "Entwicklermodus (zeigt zusätzlich Branches an)", "bool", None,
-     "Blendet in „Verlauf“ und „Dateien / Fenster“ eine Spalte mit dem Git-Branch ein."),
-    ("Daten & Anzeige", "project_roots", "Projekt-Ordner (einer pro Zeile) – für die Branch-Anzeige", "lines", None,
-     "Eltern-Ordner deiner Git-Projekte, z. B. „C:\\Programmieren“. VS Code / Explorer zeigen den "
-     "Branch nicht im Titel – TimeTracker liest ihn dann aus <Ordner>\\<Projekt>\\.git\\HEAD. "
-     "(Alternativ in VS Code: window.title um ${activeRepositoryBranchName} ergänzen.)"),
+     "Blendet in „Verlauf“ und „Dateien / Fenster“ eine Spalte mit dem Git-Branch ein. "
+     "Die lokalen Repos werden automatisch gefunden (Home-Verzeichnis + Laufwerks-Ordner)."),
 
     ("Autostart", "autostart", "TimeTracker mit Windows starten", "bool", None,
      "Trägt einen Eintrag im Autostart des aktuellen Benutzers ein (HKCU…\\Run)."),

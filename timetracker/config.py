@@ -81,6 +81,10 @@ DEFAULT_APP_NAMES: dict[str, str] = {
     "acrord32.exe": "Acrobat Reader",
     "obsidian.exe": "Obsidian",
     "notion.exe": "Notion",
+    "metaeditor64.exe": "MetaEditor",
+    "metaeditor.exe": "MetaEditor",
+    "terminal64.exe": "MetaTrader 5",
+    "terminal.exe": "MetaTrader",
 }
 
 # Reihenfolge zählt: die erste passende Regel gewinnt.
@@ -165,8 +169,8 @@ DEFAULTS: dict = {
     # Standardansicht (= "Detailansicht"-Haken aus): Editoren pro Projekt zusammenfassen.
     "collapse_editor_projects": True,
     "editor_processes": [],   # zusätzliche Editoren/IDEs (ergänzt die eingebaute Liste)
-    # Eltern-Ordner der Git-Projekte – ermöglicht die Branch-Anzeige, wenn der
-    # Fenstertitel den Branch nicht enthält (Branch wird aus .git/HEAD gelesen).
+    # Optionale zusätzliche Ordner, die beim automatischen Git-Repo-Scan
+    # (für die Branch-Anzeige) mit durchsucht werden. Normalerweise nicht nötig.
     "project_roots": [],
     # Datenschutz: für diese Prozesse/Titel werden keine Details gespeichert.
     "private_processes": ["keepass.exe", "keepassxc.exe", "1password.exe", "bitwarden.exe"],

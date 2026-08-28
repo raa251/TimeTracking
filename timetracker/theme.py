@@ -93,12 +93,18 @@ def set_titlebar(window: tk.Misc, mode: str) -> None:
     """Färbt die native Windows-Titelleiste hell/dunkel (DWM, ab Win10 20H1)."""
     try:
         window.update_idletasks()
-        hwnd = ctypes.windll.user32.GetParent(window.winfo_id()) or window.winfo_id()
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(window.winfo_id()) or window.winfo_id()
         value = ctypes.c_int(1 if mode == "dark" else 0)
         for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (neu / alt)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, attr, ctypes.byref(value), ctypes.sizeof(value)
             )
+        # Titelleiste neu zeichnen lassen – OHNE withdraw/deiconify (sonst verliert
+        # das Fenster einen Maximiert-/Vollbild-Zustand).
+        SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_FRAMECHANGED = 0x1, 0x2, 0x4, 0x20
+        user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                            SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED)
     except Exception:  # noqa: BLE001
         pass
 
