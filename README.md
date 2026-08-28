@@ -33,6 +33,7 @@ Alle Daten bleiben **lokal** auf dem Rechner. Kein Netzwerk, kein Konto.
 | **Gesamtdauer & Log** | Pro Tag und über 7 Tage: aktive Gesamtzeit, plus chronologisches Log „Datum, von–bis, welche App, welches Fenster, welche Kategorie, welcher Status“ – neueste zuerst. |
 | **Letzte 7 Tage** | Immer verfügbar (Standard-Aufbewahrung sogar 90 Tage). |
 | **Leerlauf-Erkennung** | Ab 120 s ohne Eingabe wird „Abwesend“ statt der App gezählt; der Wechselzeitpunkt wird auf die letzte echte Eingabe zurückdatiert. |
+| **Video / Besprechung** | Kein „Abwesend“, solange Ton läuft, eine Vollbild-Wiedergabe aktiv ist oder Kamera/Mikrofon in Benutzung sind (Teams, Zoom …). Abschaltbar. |
 | **Sperrbildschirm** | Gesperrte Sitzung wird als eigener Status „Gesperrt“ erfasst. |
 | **Eigene Fenster** | TimeTracker selbst (Dashboard, Einstellungen, Farb-/Kategorie-Fenster) zählt als **ein** Eintrag „TimeTracker“, nicht pro Dialog. |
 | **Kategorien** | Entwicklung, Browser, Kommunikation, Office, Design, Medien, Gaming, System – frei konfigurierbar. |
@@ -171,6 +172,7 @@ die Datei kann aber auch direkt bearbeitet werden.
 |---|---|---|
 | `poll_interval_seconds` | `3` | Fester Prüf-Takt fürs aktive Fenster (nicht ereignisgesteuert) |
 | `idle_threshold_seconds` | `120` | Ab wann „Abwesend“ |
+| `keep_active_on_media` | `true` | Kein „Abwesend“ bei Video (Ton) / Vollbild / Besprechung |
 | `retention_days` | `90` | Aufbewahrung (min. 7) |
 | `track_titles` | `true` | Fenstertitel/Dateien speichern |
 | `collapse_editor_projects` | `true` | Merkt sich den „Detailansicht“-Haken (aus = pro Projekt) |
@@ -219,6 +221,7 @@ timetracker/
   winapi.py           ctypes-Wrapper: aktives Fenster, Leerlauf, Sperre
   classify.py         Prozess → Anzeigename, Titel → Datei/Projekt/Branch, Kategorie, Filter
   gitinfo.py          findet lokale Git-Repos, liest .git/HEAD (Branch-Anzeige)
+  presence.py         Anwesenheit trotz fehlender Eingabe (Ton / Vollbild / Kamera-Mikro)
   database.py         SQLite (WAL, eine Verbindung pro Thread, Spalten-Migration)
   tracker.py          Hintergrund-Thread: pollt & schreibt Segmente (pro Datei)
   reporting.py        Aggregation, Verlauf, Projekt-Collapse, CSV/JSON-Export
@@ -242,6 +245,9 @@ build.py / build.bat  baut dist\TimeTracker.exe (PyInstaller)
 * Nur **Windows** (nutzt `user32`/`kernel32` und `winreg`).
 * Die „Datei-Erkennung“ basiert auf dem Fenstertitel – bei Programmen ohne
   aussagekräftigen Titel bleibt nur der App-Name.
-* Die Leerlauf-Erkennung ist systemweit (`GetLastInputInfo`); Videos schauen
-  ohne Mausbewegung zählt daher als „Abwesend“, sofern nicht vorher pausiert.
+* Die Leerlauf-Erkennung ist systemweit (`GetLastInputInfo`). Damit lange Videos und
+  Besprechungen nicht als „Abwesend“ zählen, gilt der Nutzer auch dann als anwesend, wenn
+  Ton läuft (Core-Audio-Pegel), eine Vollbild-Wiedergabe aktiv ist oder Kamera/Mikrofon
+  benutzt werden (`keep_active_on_media`, Standard an). Nachteil: laufende Musik ohne
+  Anwesenheit zählt dann ebenfalls als aktiv.
 * `pythonw.exe` starten heißt: kein Fenster. Beenden nur über das Tray-Menü.

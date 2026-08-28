@@ -168,6 +168,9 @@ DEFAULTS: dict = {
     "min_segment_seconds": 1,
     "track_titles": True,
     "autostart": False,
+    # Kein "Abwesend", solange ein Video läuft (Ton), Vollbild-Wiedergabe aktiv ist
+    # oder eine Besprechung läuft (Kamera/Mikrofon in Benutzung).
+    "keep_active_on_media": True,
     # Standardansicht (= "Detailansicht"-Haken aus): Editoren pro Projekt zusammenfassen.
     "collapse_editor_projects": True,
     "editor_processes": [],   # zusätzliche Editoren/IDEs (ergänzt die eingebaute Liste)

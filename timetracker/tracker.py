@@ -52,6 +52,8 @@ class Tracker(threading.Thread):
         self.status_callback = status_callback
 
         self._own_pid = os.getpid()            # eigene Fenster nur als "1 Fenster" werten
+        self._last_present = 0.0               # zuletzt "anwesend" (Eingabe oder Video/Meeting)
+        self._audio_streak = 0
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._seg: dict | None = None          # aktuell offenes Segment
@@ -135,11 +137,19 @@ class Tracker(threading.Thread):
             self._close_current(now)
             return
 
-        idle = winapi.get_idle_seconds()
+        raw_idle = winapi.get_idle_seconds()
         threshold = float(self.config.get("idle_threshold_seconds", 120))
 
+        # Bei Eingabe oder laufendem Video/laufender Besprechung als "anwesend" merken.
+        if raw_idle < threshold:
+            self._last_present = now
+            self._audio_streak = 0
+        elif self.config.get("keep_active_on_media", True) and self._media_present():
+            self._last_present = now
+        idle = (now - self._last_present) if self._last_present else raw_idle
+
         if winapi.is_workstation_locked():
-            self._transition(STATE_LOCKED, now, idle, today, info=None)
+            self._transition(STATE_LOCKED, now, raw_idle, today, info=None)
         elif idle >= threshold:
             self._transition(STATE_IDLE, now, idle, today, info=None)
         else:
@@ -219,6 +229,21 @@ class Tracker(threading.Thread):
         )
         self._seg = {"id": seg_id, "key": key, "state": state, "day": today,
                      "start": boundary, "end": boundary}
+
+    def _media_present(self) -> bool:
+        """Anwesend trotz fehlender Eingabe – Vollbild-Video, Besprechung oder laufender Ton."""
+        try:
+            from . import presence
+            if presence.is_fullscreen_or_presenting() or presence.is_capture_active():
+                self._audio_streak = 0
+                return True
+            if presence.audio_playing():
+                self._audio_streak += 1
+                return self._audio_streak >= 2   # kurze Systemtöne ignorieren
+            self._audio_streak = 0
+        except Exception:  # noqa: BLE001
+            log.debug("Anwesenheitsprüfung fehlgeschlagen", exc_info=True)
+        return False
 
     def _head_cached(self, repo_dir: str) -> str:
         now = time.time()

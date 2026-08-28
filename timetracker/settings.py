@@ -18,6 +18,9 @@ _SPEC: list[tuple] = [
      "Fester Takt, in dem das aktive Fenster geprüft wird (Standard 3s)."),
     ("Erfassung", "idle_threshold_seconds", "Als „abwesend“ zählen ab (Sekunden ohne Eingabe)", "int", (10, 7200),
      "Bis dahin wird die Zeit weiter der App zugerechnet, danach als „Abwesend“."),
+    ("Erfassung", "keep_active_on_media", "Bei Video / Besprechung nicht auf „abwesend“", "bool", None,
+     "Kein „Abwesend“, solange Ton läuft (Video/Stream), eine Vollbild-Wiedergabe aktiv ist "
+     "oder Kamera/Mikrofon in Benutzung sind (Teams, Zoom …)."),
     ("Erfassung", "min_segment_seconds", "Kürzeste erfasste Dauer (Sekunden)", "int", (0, 600),
      "Einträge, die kürzer sind, werden nicht gespeichert. Bei Standard (3 s Takt) meist ohne "
      "Wirkung – höher stellen (z. B. 30), um kurze Blicke auf andere Fenster auszublenden."),
