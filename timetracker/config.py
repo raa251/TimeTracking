@@ -83,6 +83,7 @@ DEFAULT_APP_NAMES: dict[str, str] = {
     "notion.exe": "Notion",
     "metaeditor64.exe": "MetaEditor",
     "metaeditor.exe": "MetaEditor",
+    "timetracker.exe": "TimeTracker",
     "terminal64.exe": "MetaTrader 5",
     "terminal.exe": "MetaTrader",
 }
@@ -141,7 +142,8 @@ DEFAULT_CATEGORIES: list[dict] = [
     },
     {
         "category": "System / Datei",
-        "processes": ["explorer.exe", "taskmgr.exe", "systemsettings.exe", "mmc.exe", "regedit.exe"],
+        "processes": ["explorer.exe", "taskmgr.exe", "systemsettings.exe", "mmc.exe", "regedit.exe",
+                      "timetracker.exe"],
         "title_patterns": [],
     },
 ]

@@ -51,6 +51,7 @@ class Tracker(threading.Thread):
         self.config = config
         self.status_callback = status_callback
 
+        self._own_pid = os.getpid()            # eigene Fenster nur als "1 Fenster" werten
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._seg: dict | None = None          # aktuell offenes Segment
@@ -162,10 +163,19 @@ class Tracker(threading.Thread):
         # Es wird pro Datei/Tab gespeichert; das Zusammenfassen zu "Projekt"
         # passiert erst bei der Anzeige (Detailansicht-Schalter im Dashboard).
         if state == STATE_ACTIVE:
-            if is_private(process, raw_title, self.config):
+            if info.get("pid") and info["pid"] == self._own_pid:
+                # TimeTracker selbst (Dashboard, Einstellungen, Farb-/Kategorie-Fenster …)
+                # -> alle als EIN Fenster werten, nicht pro Dialog aufsplitten.
+                app, process = "TimeTracker", "timetracker.exe"
+                title = document = branch = ""
+                category = (self.config.data.get("app_categories", {}).get(app)
+                            or categorize("timetracker.exe", "", self.config))
+                key = (state, "timetracker.exe", "")
+            elif is_private(process, raw_title, self.config):
                 app, document, category = "Privat", "", "Privat"
                 title, exe_path = "", ""
                 process = process or "privat"
+                key = (state, process.lower(), title)
             else:
                 app = friendly_app_name(process, self.config) if process else "Unbekannt"
                 category = (self.config.data.get("app_categories", {}).get(app)
@@ -178,7 +188,7 @@ class Tracker(threading.Thread):
                     document = parse_document(title, process)
                     project_hint = document if process.lower() == "explorer.exe" else ""
                 document, branch = self._git_context(raw_title, project_hint, document, editor)
-            key = (state, process.lower(), title)
+                key = (state, process.lower(), title)
         else:
             app = "Abwesend" if state == STATE_IDLE else "Gesperrt"
             document, category, process, exe_path, title = "", "Abwesenheit", "", "", ""

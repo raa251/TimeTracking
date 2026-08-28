@@ -34,6 +34,7 @@ Alle Daten bleiben **lokal** auf dem Rechner. Kein Netzwerk, kein Konto.
 | **Letzte 7 Tage** | Immer verfügbar (Standard-Aufbewahrung sogar 90 Tage). |
 | **Leerlauf-Erkennung** | Ab 120 s ohne Eingabe wird „Abwesend“ statt der App gezählt; der Wechselzeitpunkt wird auf die letzte echte Eingabe zurückdatiert. |
 | **Sperrbildschirm** | Gesperrte Sitzung wird als eigener Status „Gesperrt“ erfasst. |
+| **Eigene Fenster** | TimeTracker selbst (Dashboard, Einstellungen, Farb-/Kategorie-Fenster) zählt als **ein** Eintrag „TimeTracker“, nicht pro Dialog. |
 | **Kategorien** | Entwicklung, Browser, Kommunikation, Office, Design, Medien, Gaming, System – frei konfigurierbar. |
 | **Produktivitäts-Score** | Grobe Einordnung produktiv / neutral / ablenkend je Kategorie. |
 | **Kennzahlen** | Längster ununterbrochener Fokus, Anzahl App-Wechsel, erste/letzte Aktivität, Tagesziel-Fortschritt. |
