@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import pystray
 from PIL import Image, ImageDraw
@@ -10,6 +11,21 @@ from pystray import Menu, MenuItem
 from . import autostart
 
 log = logging.getLogger(__name__)
+
+# Eigene Fensternachricht: „Status neu zeichnen". Der Tracker-Thread darf die
+# pystray-/Shell_NotifyIcon-/Menü-Aufrufe NICHT selbst machen (das Tray-Fenster
+# gehört dem Hauptthread – fremd-thread-Aufrufe von DestroyMenu/CreatePopupMenu/
+# Shell_NotifyIcon sind ein Absturzrisiko). Stattdessen legt er nur die Daten ab
+# und postet diese Nachricht; pystrays Dispatcher ruft den Handler dann im
+# Message-Loop-Thread auf.  WM_USER+20 kollidiert nicht mit pystray
+# (WM_STOP = WM_USER+10, WM_NOTIFY = WM_USER+11).
+try:
+    from pystray._util import win32 as _pswin32
+
+    _WM_STATUS = _pswin32.WM_USER + 20
+except Exception:  # noqa: BLE001  – ohne die internen Konstanten fällt set_status zurück
+    _pswin32 = None
+    _WM_STATUS = 0
 
 
 def make_image(paused: bool = False, size: int = 64) -> Image.Image:
@@ -52,12 +68,20 @@ class Tray:
         self.app = app
         self._status_text = "TimeTracker startet …"
         self._paused_shown = False
+        self._pending: tuple[float, bool] | None = None   # vom Tracker-Thread gesetzt
+        self._pending_lock = threading.Lock()
         self.icon = pystray.Icon(
             "timetracker",
             icon=make_image(False),
             title="TimeTracker",
             menu=self._menu(),
         )
+        # Handler in pystrays Dispatcher einklinken – läuft im Message-Loop-Thread.
+        if _WM_STATUS:
+            try:
+                self.icon._message_handlers[_WM_STATUS] = self._on_status_message
+            except Exception:  # noqa: BLE001
+                log.debug("Status-Handler konnte nicht registriert werden", exc_info=True)
 
     # -- Menüaufbau -------------------------------------------------
     def _menu(self) -> Menu:
@@ -88,6 +112,34 @@ class Tray:
 
     # -- Laufzeit-Updates ----------------------------------------
     def set_status(self, active_today_seconds: float, paused: bool) -> None:
+        """Vom Tracker-Thread aufgerufen: nur Daten ablegen, UI-Thread wecken."""
+        with self._pending_lock:
+            self._pending = (active_today_seconds, paused)
+
+        hwnd = getattr(self.icon, "_hwnd", None)
+        if _pswin32 is not None and hwnd:
+            try:
+                _pswin32.PostMessage(hwnd, _WM_STATUS, 0, 0)
+                return
+            except Exception:  # noqa: BLE001
+                pass
+        # Tray-Fenster noch nicht bereit -> Daten liegen lassen, der nächste
+        # Status-Tick zieht sie nach. Nur wenn pystray-Interna fehlen (PostMessage
+        # nicht verfügbar) direkt aktualisieren – dann bleibt kein anderer Weg.
+        if _pswin32 is None:
+            self._apply_pending()
+
+    def _on_status_message(self, wparam, lparam):  # pystray-Dispatcher, Message-Loop-Thread
+        self._apply_pending()
+        return 0
+
+    def _apply_pending(self) -> None:
+        with self._pending_lock:
+            pending, self._pending = self._pending, None
+        if pending is None:
+            return
+        active_today_seconds, paused = pending
+
         from .reporting import fmt_duration
 
         if paused:

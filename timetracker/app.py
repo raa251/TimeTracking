@@ -8,7 +8,7 @@ import threading
 import time
 from datetime import datetime
 
-from . import autostart
+from . import autostart, diagnostics
 from .config import DATA_DIR, DB_PATH, EXPORT_DIR, LOG_PATH, Config
 from .database import Database
 from .tracker import Tracker
@@ -33,6 +33,8 @@ def setup_logging(verbose: bool = False) -> None:
         stream = logging.StreamHandler()
         stream.setFormatter(fmt)
         root.addHandler(stream)
+
+    diagnostics.install(DATA_DIR / "crash.log")
 
 
 class Application:
@@ -73,7 +75,13 @@ class Application:
         self.tracker.stop()
         self.tracker.join(timeout=6)
         if self._dashboard_thread and self._dashboard_thread.is_alive():
-            self._dashboard_thread.join(timeout=3)
+            dash = self._dashboard
+            if dash is not None:
+                try:
+                    dash.root.after(0, dash.shutdown)  # echtes quit()+destroy() im Dashboard-Thread
+                except Exception:  # noqa: BLE001
+                    pass
+            self._dashboard_thread.join(timeout=3)  # _watch_shutdown greift zusätzlich
         self.tray.stop()
 
     def _teardown(self) -> None:
@@ -102,8 +110,7 @@ class Application:
                 dash = self._dashboard
                 if dash is not None:
                     try:
-                        root = dash.root
-                        root.after(0, lambda: (root.deiconify(), root.lift(), root.focus_force()))
+                        dash.root.after(0, dash.show)  # nur wieder einblenden
                     except Exception:  # noqa: BLE001
                         pass
                 return

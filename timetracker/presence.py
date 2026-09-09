@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import ctypes
 import logging
+import threading
+import time
 import winreg
 from ctypes import POINTER, byref, c_float, c_void_p, wintypes
 
@@ -146,32 +148,57 @@ def _vtbl(ptr, vtbl_type):
     return ctypes.cast(ctypes.cast(ptr, POINTER(c_void_p))[0], POINTER(vtbl_type)).contents
 
 
-def audio_peak() -> float:
-    """Aktueller Peak-Pegel (0..1) des Standard-Wiedergabegeräts; -1.0 bei Fehler."""
-    ole32 = ctypes.windll.ole32
-    ole32.CoInitialize(None)  # S_FALSE, falls bereits initialisiert – egal
+# COM wird pro Thread genau einmal initialisiert – als MTA (Worker-Thread ohne
+# Nachrichtenschleife). Das frühere ``CoInitialize`` (STA) bei JEDEM Aufruf war
+# unbalanciert und konnte je nach Audiotreiber zu Deadlocks/Access Violations
+# führen (vermutete Ursache des ~30-Minuten-Absturzes auf dem Testrechner).
+_COINIT_MULTITHREADED = 0x0
+_tls = threading.local()
+
+# Circuit-Breaker: Nach mehreren Fehlern in Folge die Audioprüfung eine Weile
+# ruhen lassen. Vollbild- und Kamera-/Mikrofon-Erkennung laufen unabhängig weiter.
+_MAX_FAILS = 5
+_COOLDOWN_SECONDS = 300.0
+_fail_streak = 0
+_disabled_until = 0.0
+
+
+def _ensure_com() -> bool:
+    if getattr(_tls, "com_ready", None) is not None:
+        return _tls.com_ready
+    try:
+        hr = ctypes.windll.ole32.CoInitializeEx(None, _COINIT_MULTITHREADED)
+        _tls.com_ready = hr >= 0  # S_OK/S_FALSE ok; RPC_E_CHANGED_MODE (<0) nicht
+        if not _tls.com_ready:
+            log.warning("CoInitializeEx(MTA) fehlgeschlagen (hr=0x%08x) – Audioprüfung aus",
+                        hr & 0xFFFFFFFF)
+    except Exception:  # noqa: BLE001
+        _tls.com_ready = False
+    return _tls.com_ready
+
+
+def _read_peak() -> float:
+    """Roher Peak-Pegel; -1.0 bei Fehler. COM ist bereits initialisiert."""
     enum = c_void_p()
-    if ole32.CoCreateInstance(byref(_CLSID_MMDeviceEnumerator), None, _CLSCTX_ALL,
-                              byref(_IID_IMMDeviceEnumerator), byref(enum)) != 0 or not enum.value:
+    if ctypes.windll.ole32.CoCreateInstance(
+            byref(_CLSID_MMDeviceEnumerator), None, _CLSCTX_ALL,
+            byref(_IID_IMMDeviceEnumerator), byref(enum)) != 0 or not enum.value:
         return -1.0
     dev = meter = None
     try:
-        ev = _vtbl(enum, _EnumVtbl)
         dev = c_void_p()
-        if ev.GetDefaultAudioEndpoint(enum, _eRender, _eMultimedia, byref(dev)) != 0 or not dev.value:
+        if _vtbl(enum, _EnumVtbl).GetDefaultAudioEndpoint(
+                enum, _eRender, _eMultimedia, byref(dev)) != 0 or not dev.value:
             return -1.0
-        dv = _vtbl(dev, _DevVtbl)
         meter = c_void_p()
-        if dv.Activate(dev, byref(_IID_IAudioMeterInformation), _CLSCTX_ALL, None,
-                       byref(meter)) != 0 or not meter.value:
+        if _vtbl(dev, _DevVtbl).Activate(
+                dev, byref(_IID_IAudioMeterInformation), _CLSCTX_ALL, None,
+                byref(meter)) != 0 or not meter.value:
             return -1.0
         peak = c_float(0.0)
         if _vtbl(meter, _MeterVtbl).GetPeakValue(meter, byref(peak)) != 0:
             return -1.0
         return float(peak.value)
-    except Exception:  # noqa: BLE001
-        log.debug("audio_peak fehlgeschlagen", exc_info=True)
-        return -1.0
     finally:
         for ptr, vt in ((meter, _MeterVtbl), (dev, _DevVtbl), (enum, _EnumVtbl)):
             if ptr and ptr.value:
@@ -179,6 +206,34 @@ def audio_peak() -> float:
                     _vtbl(ptr, vt).Release(ptr)
                 except Exception:  # noqa: BLE001
                     pass
+
+
+def audio_peak() -> float:
+    """Aktueller Peak-Pegel (0..1) des Standard-Wiedergabegeräts; -1.0 bei Fehler."""
+    global _fail_streak, _disabled_until
+    now = time.monotonic()
+    if now < _disabled_until:
+        return -1.0
+    if not _ensure_com():
+        _disabled_until = now + _COOLDOWN_SECONDS
+        return -1.0
+    try:
+        value = _read_peak()
+    except Exception:  # noqa: BLE001
+        log.debug("audio_peak fehlgeschlagen", exc_info=True)
+        value = -1.0
+
+    if value < 0.0:
+        _fail_streak += 1
+        if _fail_streak >= _MAX_FAILS:
+            _disabled_until = now + _COOLDOWN_SECONDS
+            _fail_streak = 0
+            log.warning("Audioprüfung nach %d Fehlern in Folge für %ds pausiert",
+                        _MAX_FAILS, int(_COOLDOWN_SECONDS))
+        return -1.0
+
+    _fail_streak = 0
+    return value
 
 
 def audio_playing(threshold: float = 0.003) -> bool:

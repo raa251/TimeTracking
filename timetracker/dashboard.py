@@ -28,6 +28,7 @@ class Dashboard:
         self.config = config
         self.shutdown_event = shutdown_event
         self._after_jobs: list[str] = []
+        self._visible = True
 
         self.root = tk.Tk()
         self.root.title("TimeTracker – Dashboard")
@@ -665,30 +666,71 @@ class Dashboard:
         self._after_jobs.append(self.root.after(ms, fn))
 
     def _auto_refresh(self) -> None:
-        self._refresh()
+        if self._visible:                     # ausgeblendet: nicht sinnlos die DB abfragen
+            self._refresh()
         self._schedule(30_000, self._auto_refresh)
 
     def _watch_shutdown(self) -> None:
         if self.shutdown_event is not None and self.shutdown_event.is_set():
-            self.close()
+            self.shutdown()
             return
         self._schedule(500, self._watch_shutdown)
 
     def run(self) -> None:
         self.root.mainloop()
 
+    def show(self) -> None:
+        """Fenster wieder einblenden (Tray-Klick)."""
+        self._visible = True
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except tk.TclError:
+            return
+        self._refresh()
+
     def close(self) -> None:
+        """Nur ausblenden – Thread und Tk-Interpreter bleiben am Leben.
+
+        Früher wurde hier ``root.destroy()`` aufgerufen und beim nächsten Öffnen
+        ein neues ``Tk()`` in einem neuen Thread erzeugt. Sobald die
+        Garbage-Collection später die Reste des alten Dashboards aufräumte, lief
+        ``Tcl_DeleteInterp`` im falschen Thread → Tcl-Panic (0x80000003), der
+        ganze Prozess brach hart ab.
+        """
+        self._visible = False
+        try:
+            self.root.withdraw()
+        except tk.TclError:
+            pass
+
+    def shutdown(self) -> None:
+        """Endgültig schließen – nur beim Beenden der App.
+
+        Läuft im Dashboard-Thread (per ``root.after`` bzw. ``_watch_shutdown``).
+        """
+        root = self.root
+        if root is None:                       # schon heruntergefahren
+            return
         for job in self._after_jobs:
             try:
-                self.root.after_cancel(job)
+                root.after_cancel(job)
             except tk.TclError:
                 pass
         self._after_jobs.clear()
         try:
-            self.root.quit()
-            self.root.destroy()
+            root.quit()
+            root.destroy()
         except tk.TclError:
             pass
+        # Verbleibende Tk-Wrapper (Variablen, PhotoImage, Widgets) JETZT im eigenen
+        # Thread einsammeln. Sonst finalisiert sie später der GC eines anderen
+        # Threads → „Tcl_AsyncDelete: async handler deleted by the wrong thread".
+        import gc
+        for name in list(self.__dict__):
+            setattr(self, name, None)
+        gc.collect()
 
 
 def reporting_sort_key(raw: str):
@@ -722,5 +764,11 @@ def reporting_sort_key(raw: str):
 
 
 def open_dashboard(db: Database, config: Config, shutdown_event: threading.Event | None = None) -> None:
-    """Blockiert bis das Fenster geschlossen wird – im aufrufenden Thread ausführen."""
-    Dashboard(db, config, shutdown_event).run()
+    """Blockiert bis das Fenster geschlossen wird – im aufrufenden Thread ausführen.
+
+    Eigenständiger Aufruf (CLI ``timetracker dashboard``): das Schließen des
+    Fensters beendet hier wirklich – nicht nur ausblenden wie im Tray-Betrieb.
+    """
+    dash = Dashboard(db, config, shutdown_event)
+    dash.root.protocol("WM_DELETE_WINDOW", dash.shutdown)
+    dash.run()

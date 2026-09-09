@@ -7,7 +7,7 @@ import threading
 import time
 from datetime import datetime, time as dtime
 
-from . import gitinfo, winapi
+from . import diagnostics, gitinfo, winapi
 from .classify import (
     categorize,
     editor_document,
@@ -61,6 +61,7 @@ class Tracker(threading.Thread):
         self._last_status = 0.0
         self._repo_map: dict[str, str] = {}    # ordnername -> repo-pfad (Hintergrund-Scan)
         self._repo_lock = threading.Lock()
+        self._scan_thread: threading.Thread | None = None   # läuft immer nur einer
         self._branch_cache: dict[str, tuple[str, float]] = {}       # repo -> (branch, geprüft_um)
         self._path_repo_cache: dict[str, tuple[str, str, float]] = {}  # ordner -> (repo, branch, um)
         self._file_repo_cache: dict[str, tuple[str, str, float]] = {}  # datei -> (repo, rel, um)
@@ -97,20 +98,42 @@ class Tracker(threading.Thread):
         except Exception:  # noqa: BLE001
             log.exception("Repo-Scan fehlgeschlagen")
 
+    def _start_repo_scan(self) -> None:
+        """Startet einen Repo-Scan – aber nur, wenn nicht noch einer läuft.
+
+        Auf einem Rechner mit langsamem/blockierendem Dateisystem (totes
+        Netzlaufwerk, OneDrive) kann ein Scan minutenlang hängen. Ohne diese
+        Sperre würde sich alle 15 min ein weiterer Thread stapeln.
+        """
+        if self._scan_thread is not None and self._scan_thread.is_alive():
+            log.debug("Repo-Scan läuft noch – neuer Lauf übersprungen")
+            return
+        self._last_repo_scan = time.time()
+        self._scan_thread = threading.Thread(
+            target=self._scan_repos, name="RepoScan", daemon=True
+        )
+        self._scan_thread.start()
+
     # -- Thread-Lebenszyklus -------------------------------------------
     def run(self) -> None:
         log.info("Tracker gestartet (Intervall %ss)", self.config.get("poll_interval_seconds"))
         self._maybe_purge()
-        threading.Thread(target=self._scan_repos, name="RepoScan", daemon=True).start()
-        self._last_repo_scan = time.time()
+        self._start_repo_scan()
+        ticks = 0
+        last_heartbeat = 0.0
         while not self._stop_event.is_set():
             try:
                 self._tick()
             except Exception:  # noqa: BLE001  – Loop darf nie sterben
                 log.exception("Fehler im Tracker-Tick")
-            if time.time() - self._last_repo_scan > 900:  # alle 15 min neue Repos suchen
-                self._last_repo_scan = time.time()
-                threading.Thread(target=self._scan_repos, name="RepoScan", daemon=True).start()
+            ticks += 1
+            now = time.time()
+            if now - last_heartbeat > 300:  # alle 5 min ein Lebenszeichen in crash.log
+                last_heartbeat = now
+                diagnostics.note(f"Tracker lebt – Tick {ticks}, "
+                                 f"{threading.active_count()} Threads")
+            if now - self._last_repo_scan > 1800:  # alle 30 min neue Repos suchen
+                self._start_repo_scan()
             # Intervall bei jedem Durchlauf neu lesen – Änderung wirkt ohne Neustart
             self._stop_event.wait(max(1, int(self.config.get("poll_interval_seconds", 3))))
         self._close_current(time.time())
