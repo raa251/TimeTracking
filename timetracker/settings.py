@@ -62,6 +62,9 @@ _SPEC: list[tuple] = [
      '[{"category": "Meine Firma", "processes": ["sap.exe"], "title_patterns": ["JIRA"]}]'),
     ("Erweitert", "productivity", "Produktivität je Kategorie  (JSON-Objekt)", "json", dict,
      '1 = produktiv, 0 = neutral, -1 = ablenkend.  Beispiel:  {"Entwicklung": 1, "Gaming": -1}'),
+    ("Erweitert", "deleted_categories", "Gelöschte Kategorien  –  eine pro Zeile", "lines", None,
+     "Diese Kategorien sind ausgeblendet (auch Standardkategorien). Zeile entfernen = "
+     "Kategorie wieder anzeigen."),
 ]
 
 

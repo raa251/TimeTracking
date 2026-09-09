@@ -134,8 +134,44 @@ class Dashboard:
         for seg in getattr(self, "_segments", []):
             if seg.category:
                 cats.add(seg.category)
+        cats -= self.config.deleted_categories                  # gelöschte ausblenden
         cats.discard("")
         return cats
+
+    def _deletable_categories(self) -> set[str]:
+        """Alles, was aktuell im Kategorie-Feld auftauchen kann – jede davon ist löschbar."""
+        return self._known_categories()
+
+    def _delete_category(self, cat: str) -> None:
+        """Kategorie ausblenden (auch Standardkategorien).
+
+        Betroffene Apps fallen auf automatische Erkennung zurück; bei Standard-
+        kategorien wird zusätzlich die Auto-Erkennung für genau diese Kategorie
+        unterdrückt (die Regel wird übersprungen).
+        """
+        deleted = [c for c in self.config.data.get("deleted_categories", []) if c != cat]
+        deleted.append(cat)
+        self.config.data["deleted_categories"] = deleted
+
+        prod = dict(self.config.data.get("productivity", {}))
+        prod.pop(cat, None)
+        self.config.data["productivity"] = prod
+
+        rules = self.config.data.get("categories", [])
+        if rules:
+            self.config.data["categories"] = [r for r in rules if r.get("category") != cat]
+
+        cats = dict(self.config.data.get("app_categories", {}))
+        reset = [a for a, c in cats.items() if c == cat]
+        for a in reset:
+            cats.pop(a, None)
+        self.config.data["app_categories"] = cats
+
+        self.config.save()
+        self._refresh()
+        extra = (f" – {len(reset)} App(s) auf automatische Erkennung umgestellt"
+                 if reset else "")
+        self.status.configure(text=f"Kategorie „{cat}“ gelöscht{extra}.")
 
     def _edit_app_style(self, app: str) -> None:
         from .appstyle import AppStyleDialog
@@ -145,7 +181,9 @@ class Dashboard:
             color=self.config.app_colors.get(app, ""),
             category=self.config.app_categories.get(app, ""),
             categories=self._known_categories(),
+            deletable=self._deletable_categories(),
             on_apply=lambda color, category: self._save_app_style(app, color, category),
+            on_delete=self._delete_category,
         )
 
     def _save_app_style(self, app: str, color: str, category: str) -> None:
@@ -158,6 +196,10 @@ class Dashboard:
         cats = dict(self.config.data.get("app_categories", {}))
         if category:
             cats[app] = category
+            # war die Kategorie gelöscht? -> durch das Zuweisen wieder aktivieren
+            gone = self.config.data.get("deleted_categories", [])
+            if category in gone:
+                self.config.data["deleted_categories"] = [c for c in gone if c != category]
             if category not in self.config.productivity:      # neue Kategorie "anlegen"
                 prod = dict(self.config.data.get("productivity", {}))
                 prod[category] = 0                            # neutral
@@ -181,14 +223,19 @@ class Dashboard:
             log.debug("Fenster-Icon konnte nicht gesetzt werden", exc_info=True)
 
     def _rebuild_period_values(self) -> None:
-        """Aktualisiert ``range_days`` + die Auswahlliste des Zeitraum-Feldes auf heute."""
+        """Aktualisiert ``range_days`` + die Auswahlliste des Zeitraum-Feldes auf heute.
+
+        Reihenfolge im Dropdown: heutiger Tag oben, dann rückwärts, „Letzte 7 Tage" unten.
+        """
         self.range_days = reporting.last_n_days(7)
-        self._period_labels = ["Letzte 7 Tage"]
-        self._period_values = ["week"]
-        for day in self.range_days:
+        self._period_labels = []
+        self._period_values = []
+        for day in reversed(self.range_days):          # heute zuerst
             d = datetime.strptime(day, "%Y-%m-%d")
             self._period_labels.append(f"{WEEKDAYS[d.weekday()]}  {d.strftime('%d.%m.%Y')}")
             self._period_values.append(day)
+        self._period_labels.append("Letzte 7 Tage")
+        self._period_values.append("week")
 
     def _go_today(self) -> None:
         """Zeitraum-Auswahl auf den aktuellen Tag zurücksetzen (beim Öffnen des Fensters)."""
@@ -564,7 +611,9 @@ class Dashboard:
         tree.configure(yscrollcommand=vsb.set)
         tree.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
-        tree.tag_configure("group", font=("Segoe UI Semibold", 10))
+        tree.tag_configure("group", font=("Segoe UI Semibold", 11),
+                           background=self.pal["heading_bg"], foreground=self.pal["accent"])
+        tree.tag_configure("sep", foreground=self.pal["border"])
         tree.bind("<Button-3>", self._group_popup)
         tree.bind("<Double-1>", self._group_dblclick)
         self.group_tree = tree
@@ -679,27 +728,36 @@ class Dashboard:
             return
 
         by_size = lambda kv: -kv[1]["seconds"]  # noqa: E731
+
+        def separator() -> None:
+            t.insert("", "end", text="─" * 200, values=("",), tags=("sep",))
+
         grouped_total = 0.0
-        for name in self._group_names:
+        for i, name in enumerate(self._group_names):
+            if i > 0:
+                separator()
             members = [(k, v) for k, v in self._group_items.items()
                        if self._item_group.get(k, "") == name]
             gsecs = sum(v["seconds"] for _, v in members)
             grouped_total += gsecs
-            gid = t.insert("", "end", text=name, open=True, tags=("group",),
-                           values=(fmt_duration(gsecs, short=True),))
+            gid = t.insert("", "end", open=True, tags=("group",),
+                           text=f"  {name}",
+                           values=(f"Σ  {fmt_duration(gsecs, short=True)}",))
             self._row_meta[gid] = ("group", name)
             for k, v in sorted(members, key=by_size):
-                iid = t.insert(gid, "end", text="    " + v["label"],
+                iid = t.insert(gid, "end", text="      " + v["label"],
                                values=(fmt_duration(v["seconds"], short=True),))
                 self._row_meta[iid] = ("item", k)
 
+        if self._group_names:
+            separator()
         rest = [(k, v) for k, v in self._group_items.items()
                 if self._item_group.get(k, "") == ""]
-        gid = t.insert("", "end", text="Ohne Gruppe", open=True, tags=("group",),
+        gid = t.insert("", "end", text="  Ohne Gruppe", open=True, tags=("group",),
                        values=(fmt_duration(sum(v["seconds"] for _, v in rest), short=True),))
         self._row_meta[gid] = ("group", "")
         for k, v in sorted(rest, key=by_size):
-            iid = t.insert(gid, "end", text="    " + v["label"],
+            iid = t.insert(gid, "end", text="      " + v["label"],
                            values=(fmt_duration(v["seconds"], short=True),))
             self._row_meta[iid] = ("item", k)
 

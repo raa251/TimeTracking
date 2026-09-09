@@ -192,6 +192,7 @@ DEFAULTS: dict = {
     "app_categories": {},     # {"Visual Studio Code": "Meine Kategorie"} – Kategorie je App
     "categories": [],         # ersetzt DEFAULT_CATEGORIES, wenn nicht leer
     "productivity": {},       # überschreibt/ergänzt DEFAULT_PRODUCTIVITY
+    "deleted_categories": [], # ausgeblendete Kategorien (auch Standardkategorien)
     "idle_goal_hours": 6.0,   # Tagesziel "aktive Zeit" für die Fortschrittsanzeige
     "theme": "system",        # "system" | "light" | "dark"
     "developer_mode": False,  # zeigt zusätzlich die Git-Branch-Spalte
@@ -233,13 +234,21 @@ class Config:
         return dict(self.data.get("app_categories", {}))
 
     @property
+    def deleted_categories(self) -> set[str]:
+        return {c for c in self.data.get("deleted_categories", []) if c}
+
+    @property
     def categories(self) -> list[dict]:
-        return self.data["categories"] or DEFAULT_CATEGORIES
+        base = self.data["categories"] or DEFAULT_CATEGORIES
+        gone = self.deleted_categories
+        return [r for r in base if r.get("category") not in gone] if gone else base
 
     @property
     def productivity(self) -> dict[str, int]:
         merged = dict(DEFAULT_PRODUCTIVITY)
         merged.update(self.data.get("productivity", {}))
+        for c in self.deleted_categories:
+            merged.pop(c, None)
         return merged
 
     # -- I/O ---------------------------------------------------------------

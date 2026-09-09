@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 import tkinter as tk
-from tkinter import colorchooser, ttk
+from tkinter import colorchooser, messagebox, ttk
 
 from . import theme
 
@@ -19,11 +19,14 @@ class AppStyleDialog(tk.Toplevel):
     """``on_apply(color: str, category: str)`` – leere Strings = zurücksetzen/automatisch."""
 
     def __init__(self, parent, *, app_name: str, palette: dict, mode: str,
-                 color: str, category: str, categories, on_apply):
+                 color: str, category: str, categories, on_apply,
+                 deletable=(), on_delete=None):
         super().__init__(parent)
         self.pal = palette
         self._app = app_name
         self._on_apply = on_apply
+        self._on_delete = on_delete
+        self._deletable = set(deletable)
 
         self.title(f"Darstellung – {app_name}")
         self.configure(bg=palette["bg"])
@@ -82,10 +85,21 @@ class AppStyleDialog(tk.Toplevel):
         # --- Kategorie ---
         ttk.Label(outer, text="Kategorie", font=("Segoe UI Semibold", 9)).grid(
             row=4, column=0, sticky="w", pady=(14, 4))
-        ttk.Combobox(outer, textvariable=self._cat, width=30,
-                     values=[_AUTO] + categories).grid(row=5, column=0, sticky="we")
-        ttk.Label(outer, text="Nicht vorhandene Kategorie eintippen – sie wird angelegt.",
+        self._all_categories = list(categories)
+        cat_row = tk.Frame(outer, bg=p["bg"])
+        cat_row.grid(row=5, column=0, sticky="we")
+        self._cat_box = ttk.Combobox(cat_row, textvariable=self._cat, width=26,
+                                     values=[_AUTO] + self._all_categories)
+        self._cat_box.pack(side="left", fill="x", expand=True)
+        self._del_btn = ttk.Button(cat_row, text="Löschen", width=9,
+                                   command=self._delete_category)
+        self._del_btn.pack(side="left", padx=(6, 0))
+        # jede Änderung des Feldes (Tippen, Auswählen, programmatisch) neu bewerten
+        self._cat.trace_add("write", lambda *_: self._sync_del_btn())
+        ttk.Label(outer, text="Nicht vorhandene Kategorie eintippen – sie wird angelegt.  "
+                              "„Löschen“ stellt betroffene Apps auf automatische Erkennung.",
                   style="Hint.TLabel").grid(row=6, column=0, sticky="w", pady=(3, 0))
+        self._sync_del_btn()
 
         btns = ttk.Frame(outer)
         btns.grid(row=7, column=0, sticky="e", pady=(18, 0))
@@ -96,6 +110,33 @@ class AppStyleDialog(tk.Toplevel):
         self._refresh_preview()
 
     # -- Aktionen -------------------------------------------------
+    def _sync_del_btn(self) -> None:
+        cat = self._cat.get().strip()
+        can = bool(self._on_delete) and cat in self._deletable
+        self._del_btn.configure(state="normal" if can else "disabled")
+
+    def _delete_category(self) -> None:
+        cat = self._cat.get().strip()
+        if not self._on_delete or cat not in self._deletable:
+            return
+        if not messagebox.askyesno(
+            "Kategorie löschen",
+            f"Kategorie „{cat}“ löschen?\n\n"
+            "Apps mit dieser Kategorie werden auf automatische Erkennung umgestellt. "
+            "Die Kategorie verschwindet aus der Liste – bei einer Standardkategorie wird "
+            "sie auch nicht mehr automatisch erkannt.\n\n"
+            "(Rückgängig: die Kategorie einfach wieder einer App zuweisen.)",
+            parent=self,
+        ):
+            return
+        self._on_delete(cat)
+        self._deletable.discard(cat)
+        self._all_categories = [c for c in self._all_categories if c != cat]
+        self._cat_box.configure(values=[_AUTO] + self._all_categories)
+        if self._cat.get().strip() == cat:
+            self._cat.set(_AUTO)
+        self._sync_del_btn()
+
     def _set_color(self, hexv: str) -> None:
         self._color.set(hexv)
         self._refresh_preview()
