@@ -10,8 +10,10 @@ from datetime import datetime, time as dtime
 from . import diagnostics, gitinfo, winapi
 from .classify import (
     categorize,
+    domain_from_url,
     editor_document,
     friendly_app_name,
+    is_browser,
     is_code_editor,
     is_ignored,
     is_private,
@@ -65,7 +67,9 @@ class Tracker(threading.Thread):
         self._branch_cache: dict[str, tuple[str, float]] = {}       # repo -> (branch, geprüft_um)
         self._path_repo_cache: dict[str, tuple[str, str, float]] = {}  # ordner -> (repo, branch, um)
         self._file_repo_cache: dict[str, tuple[str, str, float]] = {}  # datei -> (repo, rel, um)
+        self._domain_cache: dict[str, tuple[str, float]] = {}          # fenstertitel -> (domain, um)
         self._last_repo_scan = 0.0
+        self._last_maint = 0.0
 
     # -- öffentliche Steuerung -------------------------------------------
     def stop(self) -> None:
@@ -119,6 +123,11 @@ class Tracker(threading.Thread):
         log.info("Tracker gestartet (Intervall %ss)", self.config.get("poll_interval_seconds"))
         self._maybe_purge()
         self._start_repo_scan()
+        try:
+            self.db.maintenance()          # veraltetes WAL vom letzten Lauf zurücksetzen
+        except Exception:  # noqa: BLE001
+            log.debug("Startup-Wartung fehlgeschlagen", exc_info=True)
+        self._last_maint = time.time()
         ticks = 0
         last_heartbeat = 0.0
         while not self._stop_event.is_set():
@@ -134,6 +143,9 @@ class Tracker(threading.Thread):
                                  f"{threading.active_count()} Threads")
             if now - self._last_repo_scan > 1800:  # alle 30 min neue Repos suchen
                 self._start_repo_scan()
+            if now - self._last_maint > 7200:  # alle 2 h: WAL-Checkpoint (+ wöchentlich VACUUM)
+                self._last_maint = now
+                self._run_maintenance()
             # Intervall bei jedem Durchlauf neu lesen – Änderung wirkt ohne Neustart
             self._stop_event.wait(max(1, int(self.config.get("poll_interval_seconds", 3))))
         self._close_current(time.time())
@@ -222,6 +234,13 @@ class Tracker(threading.Thread):
                     project_hint = document if process.lower() == "explorer.exe" else ""
                 document, branch = self._git_context(raw_title, project_hint, document, editor)
                 key = (state, process.lower(), title)
+
+                if (is_browser(process) and self.config.get("track_browser_domain", True)
+                        and self.config.get("track_titles", True)):
+                    domain = self._browser_domain(info.get("hwnd", 0), raw_title)
+                    if domain:
+                        document = domain
+                        key = (state, process.lower(), domain)  # gleiche Domain -> ein Segment
         else:
             app = "Abwesend" if state == STATE_IDLE else "Gesperrt"
             document, category, process, exe_path, title = "", "Abwesenheit", "", "", ""
@@ -267,6 +286,25 @@ class Tracker(threading.Thread):
         except Exception:  # noqa: BLE001
             log.debug("Anwesenheitsprüfung fehlgeschlagen", exc_info=True)
         return False
+
+    def _browser_domain(self, hwnd: int, title: str) -> str:
+        """Domain aus der Adressleiste – pro Fenstertitel gecacht (Navigation = neuer Titel)."""
+        if not hwnd:
+            return ""
+        now = time.time()
+        cached = self._domain_cache.get(title)
+        if cached and now - cached[1] < 90:
+            return cached[0]
+        domain = ""
+        try:
+            from . import browserinfo
+            domain = domain_from_url(browserinfo.active_url(hwnd))
+        except Exception:  # noqa: BLE001
+            log.debug("Browser-Domain fehlgeschlagen", exc_info=True)
+        self._domain_cache[title] = (domain, now)
+        if len(self._domain_cache) > 200:            # nicht unbegrenzt wachsen lassen
+            self._domain_cache.clear()
+        return domain
 
     def _head_cached(self, repo_dir: str) -> str:
         now = time.time()
@@ -363,8 +401,37 @@ class Tracker(threading.Thread):
             removed = self.db.purge_older_than(int(self.config.get("retention_days", 90)))
             if removed:
                 log.info("Aufräumen: %s alte Segmente gelöscht", removed)
+                info = self.db.maintenance(vacuum=True)      # nach großen Löschungen kompaktieren
+                if "vacuum_error" not in info:
+                    self.db.set_meta("last_vacuum", today)
+                freed = info.get("vacuum_freed", 0)
+                if freed:
+                    log.info("Datenbank kompaktiert – %d KB frei", freed // 1024)
         except Exception:  # noqa: BLE001
             log.exception("Purge fehlgeschlagen")
+
+    def _vacuum_due(self) -> bool:
+        """Höchstens einmal pro Woche VACUUM (räumt freie Seiten von Kurz-Segmenten weg)."""
+        last = self.db.get_meta("last_vacuum")
+        if not last:
+            return True
+        try:
+            gap = datetime.now().date() - datetime.strptime(last, "%Y-%m-%d").date()
+            return gap.days >= 7
+        except ValueError:
+            return True
+
+    def _run_maintenance(self) -> None:
+        try:
+            do_vacuum = self._vacuum_due()
+            info = self.db.maintenance(vacuum=do_vacuum)
+            if do_vacuum and "vacuum_error" not in info:
+                self.db.set_meta("last_vacuum", datetime.now().strftime("%Y-%m-%d"))
+                freed = info.get("vacuum_freed", 0)
+                log.info("DB-Wartung: WAL zurückgesetzt%s",
+                         f", {freed // 1024} KB durch VACUUM frei" if freed else "")
+        except Exception:  # noqa: BLE001
+            log.exception("DB-Wartung fehlgeschlagen")
 
     def _emit_status(self, force: bool = False) -> None:
         if not self.status_callback:

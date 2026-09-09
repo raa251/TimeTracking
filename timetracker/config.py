@@ -171,6 +171,9 @@ DEFAULTS: dict = {
     # Kein "Abwesend", solange ein Video läuft (Ton), Vollbild-Wiedergabe aktiv ist
     # oder eine Besprechung läuft (Kamera/Mikrofon in Benutzung).
     "keep_active_on_media": True,
+    # Für Browser die Domain (github.com, youtube.com …) aus der Adressleiste erfassen
+    # statt nur den Seitentitel. Nutzt UI Automation; bei Bedarf abschaltbar.
+    "track_browser_domain": True,
     # Standardansicht (= "Detailansicht"-Haken aus): Editoren pro Projekt zusammenfassen.
     "collapse_editor_projects": True,
     "editor_processes": [],   # zusätzliche Editoren/IDEs (ergänzt die eingebaute Liste)

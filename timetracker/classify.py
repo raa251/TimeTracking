@@ -9,7 +9,9 @@ from .config import Config
 _SPLIT_RE = re.compile(r"\s+[‒–—―\-\|]\s+")
 _LEAD_RE = re.compile(r"^[\s\*•●○\-]+")
 
-_BROWSERS = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "arc.exe"}
+_BROWSERS = {"chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "arc.exe",
+             "vivaldi.exe", "opera_gx.exe", "librewolf.exe", "chromium.exe", "waterfox.exe",
+             "floorp.exe", "thorium.exe", "zen.exe"}
 _EDITORS = {
     "code.exe", "code - insiders.exe", "cursor.exe", "devenv.exe", "pycharm64.exe",
     "idea64.exe", "webstorm64.exe", "rider64.exe", "sublime_text.exe", "notepad++.exe",
@@ -100,6 +102,33 @@ def parse_document(title: str, process: str) -> str:
     if tail == stem or tail in {"microsoft edge", "google chrome", "mozilla firefox"}:
         return " - ".join(parts[:-1]).strip()
     return text
+
+
+def is_browser(process: str) -> bool:
+    return process.lower() in _BROWSERS
+
+
+_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)
+
+
+def domain_from_url(value: str) -> str:
+    """``https://www.github.com/x?y``  ->  ``github.com``.  Kein Treffer -> ``""``.
+
+    Für die Adressleisten-Eingabe (Suche, ``chrome://…`` usw.) wird ``""`` geliefert.
+    """
+    text = (value or "").strip()
+    if not text or " " in text.split("/", 1)[0]:
+        return ""
+    text = _SCHEME_RE.sub("", text)
+    host = re.split(r"[/?#\\]", text, 1)[0].strip().lower()
+    host = host.split("@")[-1].split(":")[0]           # user:pass@ und :port entfernen
+    if host.startswith("www."):
+        host = host[4:]
+    if "." not in host or host.endswith(".") or len(host) > 253:
+        return ""
+    if not re.fullmatch(r"[a-z0-9.\-]+", host):
+        return ""
+    return host
 
 
 def is_code_editor(process: str, config: Config) -> bool:

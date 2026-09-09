@@ -7,10 +7,13 @@ Absturz kostet daher höchstens ein Poll-Intervall an Daten.
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS segments (
@@ -104,6 +107,40 @@ class Database:
         cutoff = (datetime.now() - timedelta(days=max(7, days))).strftime("%Y-%m-%d")
         cur = self._connect().execute("DELETE FROM segments WHERE day < ?", (cutoff,))
         return cur.rowcount
+
+    def _file_size(self) -> int:
+        try:
+            return Path(self.path).stat().st_size
+        except OSError:
+            return 0
+
+    def maintenance(self, *, vacuum: bool = False) -> dict:
+        """Optional VACUUM, dann WAL in die Hauptdatei übertragen und ``-wal`` leeren.
+
+        Reihenfolge zählt: im WAL-Modus verkleinert sich die ``.db`` erst durch den
+        ``wal_checkpoint(TRUNCATE)`` NACH dem VACUUM. Nur aus dem Schreiber-Thread
+        (Tracker) aufrufen. Fehler (z. B. „database is locked", weil das Dashboard
+        gerade liest) werden geschluckt – der nächste Lauf holt es nach.
+        """
+        conn = self._connect()
+        info: dict = {}
+        before = self._file_size() if vacuum else 0
+        if vacuum:
+            try:
+                conn.execute("VACUUM")
+                conn.execute("PRAGMA journal_mode=WAL")   # VACUUM behält WAL – zur Sicherheit
+            except sqlite3.Error as exc:
+                info["vacuum_error"] = str(exc)
+                log.debug("VACUUM übersprungen: %s", exc)
+        try:
+            row = conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            info["checkpoint"] = tuple(row) if row else None  # (busy, wal_pages, übertragen)
+        except sqlite3.Error as exc:
+            info["checkpoint_error"] = str(exc)
+            log.debug("WAL-Checkpoint fehlgeschlagen: %s", exc)
+        if vacuum and "vacuum_error" not in info:
+            info["vacuum_freed"] = max(0, before - self._file_size())
+        return info
 
     def set_meta(self, key: str, value: str) -> None:
         self._connect().execute(

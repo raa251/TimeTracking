@@ -26,6 +26,9 @@ _SPEC: list[tuple] = [
      "Wirkung – höher stellen (z. B. 30), um kurze Blicke auf andere Fenster auszublenden."),
     ("Erfassung", "track_titles", "Fenstertitel und Dateinamen speichern", "bool", None,
      "Aus: es wird nur der Programmname erfasst, kein Titel/keine Datei."),
+    ("Erfassung", "track_browser_domain", "Bei Browsern die Domain erfassen", "bool", None,
+     "Erfasst github.com / youtube.com … aus der Adressleiste (statt nur des Seitentitels) und "
+     "fasst Besuche derselben Domain zusammen. Liest die Adressleiste per UI Automation aus."),
 
     ("Daten & Anzeige", "retention_days", "Daten aufbewahren (Tage)", "int", (7, 3650),
      "Ältere Einträge werden automatisch gelöscht. Minimum 7."),
