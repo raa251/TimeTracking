@@ -137,6 +137,10 @@ class Database:
         ).fetchone()
         return float(row["s"])
 
+    def days_with_data(self) -> set[str]:
+        rows = self._connect().execute("SELECT DISTINCT day FROM segments").fetchall()
+        return {r["day"] for r in rows}
+
     def first_last_day(self) -> tuple[str | None, str | None]:
         row = self._connect().execute(
             "SELECT MIN(day) AS lo, MAX(day) AS hi FROM segments"

@@ -1,13 +1,15 @@
 """Tkinter-Dashboard: Kennzahlen, Diagramme, App-Ranglisten und das Verlaufs-Log."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
 import sys
 import threading
+from collections import defaultdict
 from datetime import datetime, timedelta
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 import tkinter as tk
 from tkinter import ttk
@@ -36,8 +38,8 @@ class Dashboard:
         self.root.minsize(940, 600)
         self._set_window_icon()
 
-        self.range_days = reporting.last_n_days(7)
-        self.selection = tk.StringVar(value="week")
+        self._rebuild_period_values()                       # setzt self.range_days
+        self.selection = tk.StringVar(value=self.range_days[-1])  # beim Öffnen immer der heutige Tag
         self.log_filter = tk.StringVar(value="alle")
         # Detailansicht = pro Datei; sonst pro Projekt zusammengefasst
         self.detail_view = tk.BooleanVar(
@@ -178,18 +180,34 @@ class Dashboard:
         except Exception:  # noqa: BLE001
             log.debug("Fenster-Icon konnte nicht gesetzt werden", exc_info=True)
 
-    def _build_toolbar(self) -> None:
-        bar = ttk.Frame(self.root, padding=(10, 8))
-        bar.pack(fill="x")
-
-        ttk.Label(bar, text="Zeitraum:").pack(side="left", padx=(0, 6))
-
+    def _rebuild_period_values(self) -> None:
+        """Aktualisiert ``range_days`` + die Auswahlliste des Zeitraum-Feldes auf heute."""
+        self.range_days = reporting.last_n_days(7)
         self._period_labels = ["Letzte 7 Tage"]
         self._period_values = ["week"]
         for day in self.range_days:
             d = datetime.strptime(day, "%Y-%m-%d")
             self._period_labels.append(f"{WEEKDAYS[d.weekday()]}  {d.strftime('%d.%m.%Y')}")
             self._period_values.append(day)
+
+    def _go_today(self) -> None:
+        """Zeitraum-Auswahl auf den aktuellen Tag zurücksetzen (beim Öffnen des Fensters)."""
+        self._rebuild_period_values()
+        today = self.range_days[-1]
+        try:
+            self.period_box.configure(values=self._period_labels)
+            self.period_box.current(self._period_values.index(today))
+        except (tk.TclError, ValueError, AttributeError):
+            pass
+        self.selection.set(today)
+
+    def _build_toolbar(self) -> None:
+        bar = ttk.Frame(self.root, padding=(10, 8))
+        bar.pack(fill="x")
+
+        ttk.Label(bar, text="Zeitraum:").pack(side="left", padx=(0, 6))
+
+        self._rebuild_period_values()
 
         self.period_box = ttk.Combobox(
             bar, values=self._period_labels, state="readonly", width=20,
@@ -212,6 +230,8 @@ class Dashboard:
         idx = self.period_box.current()
         self.selection.set(self._period_values[max(0, idx)])
         self._refresh()
+        if getattr(self, "_group_tab_active", False):
+            self._group_reload()
 
     def _build_cards(self) -> None:
         self.cards_frame = ttk.Frame(self.root, padding=(10, 2))
@@ -300,6 +320,9 @@ class Dashboard:
         self.doc_tree = self._make_tree(tab_docs, tuple(doc_cols), tuple(doc_w),
                                         stretch_col="Fenster / Datei")
 
+        # -- Tab: Gruppierung -----------------------------------
+        self._build_group_tab(nb)
+
         # -- Tab: Einstellungen ---------------------------------
         from .settings import SettingsPanel
 
@@ -310,6 +333,8 @@ class Dashboard:
             settings_tab, self.config, self.pal, on_saved=self._on_settings_saved
         )
         self._settings_panel.pack(fill="both", expand=True)
+
+        nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
     def _build_statusbar(self) -> None:
         self.status = ttk.Label(self.root, text="", anchor="w", padding=(10, 3),
@@ -451,15 +476,6 @@ class Dashboard:
                 tags=(row["label"],),
             )
             self.cat_tree.tag_configure(row["label"], foreground=self._cat_color(row["label"]))
-        # Produktivität als zusätzliche Zeilen
-        prod = s.get("productivity", {})
-        if any(prod.values()):
-            self.cat_tree.insert("", "end", values=("—", "", ""))
-            for name in ("produktiv", "neutral", "ablenkend"):
-                self.cat_tree.insert(
-                    "", "end",
-                    values=(f"Σ {name}", fmt_duration(prod.get(name, 0), short=True), ""),
-                )
 
     def _fill_apps(self, s: dict) -> None:
         self._reset_tree(self.app_tree)
@@ -508,6 +524,297 @@ class Dashboard:
             item = self.doc_tree.insert("", "end", values=tuple(vals), tags=(color,))
             self.doc_tree._full_rows[item] = list(vals)  # type: ignore[attr-defined]
             self.doc_tree.tag_configure(color, foreground=color)
+
+    # -- Gruppierung (pro Tag gespeichert, zum Zusammenzählen) -------
+    def _build_group_tab(self, nb: ttk.Notebook) -> None:
+        self._group_day: str | None = None         # Tag, dessen Gruppierung gerade bearbeitet wird
+        self._group_names: list[str] = []
+        self._item_group: dict[str, str] = {}      # item_key -> Gruppenname ("" = ohne Gruppe)
+        self._group_items: dict[str, dict] = {}    # item_key -> {app, label, seconds}
+        self._row_meta: dict[str, tuple[str, str]] = {}  # tree-iid -> ("group"|"item", wert)
+        self._group_tab_active = False
+
+        tab = ttk.Frame(nb, padding=8)
+        nb.add(tab, text="  Gruppierung  ")
+        self._group_index = nb.index("end") - 1
+
+        ttk.Label(
+            tab, style="Hint.TLabel",
+            text="Apps / Dateien eines Tages zu Projekten zusammenfassen (Rechtsklick oder "
+                 "Doppelklick). Wird pro Tag gespeichert und kann später geändert werden, solange "
+                 "die Tagesdaten vorhanden sind. Nur für einzelne Tage – nicht für die 7-Tage-Ansicht.",
+        ).pack(anchor="w", pady=(0, 6))
+
+        bar = ttk.Frame(tab)
+        bar.pack(fill="x", pady=(0, 4))
+        ttk.Button(bar, text="Neue Gruppe", command=self._group_add).pack(side="left")
+        ttk.Button(bar, text="Umbenennen", command=self._group_rename).pack(side="left", padx=4)
+        ttk.Button(bar, text="Gruppe auflösen", command=self._group_remove).pack(side="left")
+        ttk.Button(bar, text="Alles zurücksetzen", command=self._group_reset).pack(side="left", padx=4)
+        ttk.Button(bar, text="Daten neu laden", command=self._group_reload).pack(side="right")
+
+        wrap = ttk.Frame(tab)
+        wrap.pack(fill="both", expand=True)
+        tree = ttk.Treeview(wrap, columns=("Dauer",), show="tree headings", selectmode="extended")
+        tree.heading("#0", text="Gruppe / App / Datei")
+        tree.heading("Dauer", text="Dauer")
+        tree.column("#0", width=640, stretch=True)
+        tree.column("Dauer", width=140, anchor="e", stretch=False)
+        vsb = ttk.Scrollbar(wrap, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        tree.tag_configure("group", font=("Segoe UI Semibold", 10))
+        tree.bind("<Button-3>", self._group_popup)
+        tree.bind("<Double-1>", self._group_dblclick)
+        self.group_tree = tree
+
+        self.group_total = ttk.Label(tab, text="", style="Hint.TLabel")
+        self.group_total.pack(anchor="w", pady=(4, 0))
+
+    def _on_tab_changed(self, _event=None) -> None:
+        if not hasattr(self, "_group_index"):
+            return
+        try:
+            current = self._nb.index(self._nb.select())
+        except tk.TclError:
+            return
+        was_active = getattr(self, "_group_tab_active", False)
+        now_active = (current == self._group_index)
+        self._group_tab_active = now_active
+        if now_active and not was_active:
+            self._group_reload()                 # gespeicherte Gruppierung des Tages laden
+        elif was_active and not now_active:
+            self._group_save()                   # Stand sichern
+
+    # -- Speicherung der Tages-Gruppierungen ------------------------
+    def _groupings_file(self):
+        return DATA_DIR / "day_groupings.json"
+
+    def _groupings_read(self) -> dict:
+        try:
+            data = json.loads(self._groupings_file().read_text("utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _group_save(self) -> None:
+        day = getattr(self, "_group_day", None)
+        if not day:
+            return
+        data = self._groupings_read()
+        if self._group_names or any(self._item_group.values()):
+            data[day] = {
+                "groups": list(self._group_names),
+                "assign": {k: g for k, g in self._item_group.items() if g},
+            }
+        else:
+            data.pop(day, None)
+        try:                                     # verwaiste Tage (Daten gelöscht) mitentfernen
+            live = self.db.days_with_data()
+            data = {d: v for d, v in data.items() if d in live}
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            self._groupings_file().write_text(
+                json.dumps(data, ensure_ascii=False, indent=1), "utf-8"
+            )
+        except OSError:
+            log.warning("Gruppierungen konnten nicht gespeichert werden", exc_info=True)
+
+    def _group_daily_items(self, day: str) -> dict[str, dict]:
+        """Nicht überlappende Blatt-Einträge (App/Datei) eines Tages – Summe = aktive Zeit.
+
+        Immer auf Datei-Ebene, unabhängig vom „Detailansicht"-Schalter, damit die
+        gespeicherten Zuordnungs-Schlüssel stabil bleiben.
+        """
+        segs = reporting.load_day(self.db, day)
+        reporting.apply_category_overrides(segs, self.config)
+        s = reporting.summarize(segs, self.config)
+        items: dict[str, dict] = {}
+        doc_by_app: dict[str, float] = defaultdict(float)
+        for row in s["by_document"]:
+            key = f"{row['app']}\x1f{row['document']}"
+            items[key] = {"app": row["app"],
+                          "label": f"{row['app']}   ·   {row['document']}",
+                          "seconds": row["seconds"]}
+            doc_by_app[row["app"]] += row["seconds"]
+        for row in s["by_app"]:
+            rest = row["seconds"] - doc_by_app.get(row["label"], 0.0)
+            if rest > 1.0:                        # App-Zeit ohne konkrete Datei
+                items[f"{row['label']}\x1f"] = {"app": row["label"],
+                                                "label": row["label"], "seconds": rest}
+        return items
+
+    def _group_reload(self) -> None:
+        """Einträge des gewählten Tages + gespeicherte Gruppierung laden."""
+        if not hasattr(self, "group_tree"):
+            return
+        day = self.selection.get()
+        if day == "week":
+            self._group_day = None
+            self._group_items, self._group_names, self._item_group = {}, [], {}
+            self._group_render()
+            return
+        self._group_day = day
+        self._group_items = self._group_daily_items(day)
+        saved = self._groupings_read().get(day, {})
+        self._group_names = [g for g in saved.get("groups", []) if isinstance(g, str)]
+        self._item_group = {k: g for k, g in saved.get("assign", {}).items()
+                            if k in self._group_items and g in self._group_names}
+        self._group_render()
+
+    def _group_render(self) -> None:
+        t = getattr(self, "group_tree", None)
+        if t is None:
+            return
+        t.delete(*t.get_children())
+        self._row_meta = {}
+
+        if getattr(self, "_group_day", None) is None:
+            self.group_total.configure(
+                text="Die Gruppierung ist nur für einzelne Tage möglich – "
+                     "bitte oben unter „Zeitraum“ einen Tag wählen."
+            )
+            return
+
+        by_size = lambda kv: -kv[1]["seconds"]  # noqa: E731
+        grouped_total = 0.0
+        for name in self._group_names:
+            members = [(k, v) for k, v in self._group_items.items()
+                       if self._item_group.get(k, "") == name]
+            gsecs = sum(v["seconds"] for _, v in members)
+            grouped_total += gsecs
+            gid = t.insert("", "end", text=name, open=True, tags=("group",),
+                           values=(fmt_duration(gsecs, short=True),))
+            self._row_meta[gid] = ("group", name)
+            for k, v in sorted(members, key=by_size):
+                iid = t.insert(gid, "end", text="    " + v["label"],
+                               values=(fmt_duration(v["seconds"], short=True),))
+                self._row_meta[iid] = ("item", k)
+
+        rest = [(k, v) for k, v in self._group_items.items()
+                if self._item_group.get(k, "") == ""]
+        gid = t.insert("", "end", text="Ohne Gruppe", open=True, tags=("group",),
+                       values=(fmt_duration(sum(v["seconds"] for _, v in rest), short=True),))
+        self._row_meta[gid] = ("group", "")
+        for k, v in sorted(rest, key=by_size):
+            iid = t.insert(gid, "end", text="    " + v["label"],
+                           values=(fmt_duration(v["seconds"], short=True),))
+            self._row_meta[iid] = ("item", k)
+
+        total = sum(v["seconds"] for v in self._group_items.values())
+        try:
+            day_lbl = datetime.strptime(self._group_day, "%Y-%m-%d").strftime("%d.%m.%Y")
+        except (ValueError, TypeError):
+            day_lbl = self._group_day
+        self.group_total.configure(
+            text=(f"{day_lbl}  ·  {len(self._group_names)} Gruppe(n)  ·  "
+                  f"gruppiert {fmt_duration(grouped_total, short=True)} von "
+                  f"{fmt_duration(total, short=True)} aktiver Zeit  ·  wird automatisch gespeichert")
+        )
+
+    def _selected_group(self) -> str | None:
+        for iid in self.group_tree.selection():
+            kind, val = self._row_meta.get(iid, ("", ""))
+            if kind == "group" and val:
+                return val
+        return None
+
+    def _group_selected_item_keys(self) -> list[str]:
+        return [self._row_meta[iid][1] for iid in self.group_tree.selection()
+                if self._row_meta.get(iid, ("",))[0] == "item"]
+
+    def _group_assign(self, keys, target: str | None) -> None:
+        if target is None or not self._group_day:
+            return
+        for k in keys:
+            self._item_group[k] = target
+        self._group_render()
+        self._group_save()
+
+    def _group_add(self) -> str | None:
+        if not self._group_day:
+            return None
+        name = simpledialog.askstring("Neue Gruppe", "Name der Gruppe:", parent=self.root)
+        if not name or not name.strip():
+            return None
+        name = name.strip()
+        if name not in self._group_names:
+            self._group_names.append(name)
+            self._group_render()
+            self._group_save()
+        return name
+
+    def _group_rename(self) -> None:
+        old = self._selected_group()
+        if not old:
+            messagebox.showinfo("Umbenennen", "Bitte zuerst eine Gruppe auswählen.")
+            return
+        new = simpledialog.askstring("Gruppe umbenennen", "Neuer Name:",
+                                     initialvalue=old, parent=self.root)
+        if not new or not new.strip() or new.strip() == old:
+            return
+        new = new.strip()
+        self._group_names = [new if g == old else g for g in self._group_names]
+        self._item_group = {k: (new if g == old else g) for k, g in self._item_group.items()}
+        self._group_render()
+        self._group_save()
+
+    def _group_remove(self) -> None:
+        g = self._selected_group()
+        if not g:
+            messagebox.showinfo("Gruppe auflösen", "Bitte zuerst eine Gruppe auswählen.")
+            return
+        self._group_names = [x for x in self._group_names if x != g]
+        self._item_group = {k: ("" if v == g else v) for k, v in self._item_group.items()}
+        self._group_render()
+        self._group_save()
+
+    def _group_reset(self) -> None:
+        if not self._group_day:
+            return
+        if self._group_names and not messagebox.askyesno(
+            "Zurücksetzen", f"Gespeicherte Gruppierung für {self._group_day} löschen?"
+        ):
+            return
+        self._group_names = []
+        self._item_group = {}
+        self._group_render()
+        self._group_save()
+
+    def _group_popup(self, event) -> None:
+        t = self.group_tree
+        row = t.identify_row(event.y)
+        if row and row not in t.selection():
+            t.selection_set(row)
+        keys = self._group_selected_item_keys()
+        if not keys:
+            return
+        m = tk.Menu(t, tearoff=False, bg=self.pal["surface"], fg=self.pal["text"],
+                    activebackground=self.pal["sel_bg"], activeforeground=self.pal["sel_fg"])
+        for name in self._group_names:
+            m.add_command(label=f"→  {name}", command=lambda n=name: self._group_assign(keys, n))
+        m.add_command(label="→  Neue Gruppe …",
+                      command=lambda: self._group_assign(keys, self._group_add()))
+        m.add_separator()
+        m.add_command(label="aus Gruppe entfernen", command=lambda: self._group_assign(keys, ""))
+        try:
+            m.tk_popup(event.x_root, event.y_root)
+        finally:
+            m.grab_release()
+
+    def _group_dblclick(self, event) -> None:
+        row = self.group_tree.identify_row(event.y)
+        kind, key = self._row_meta.get(row, ("", ""))
+        if kind != "item":
+            return                                   # Gruppenzeile: Standard (auf/zu)
+        if self._item_group.get(key, ""):
+            self._group_assign([key], "")            # bereits gruppiert -> zurück
+        elif self._group_names:
+            self._group_assign([key], self._group_names[-1])  # in die zuletzt angelegte Gruppe
+        else:
+            self._group_assign([key], self._group_add())
 
     # -- Diagramm ----------------------------------------------------
     def _draw_chart(self) -> None:
@@ -680,7 +987,7 @@ class Dashboard:
         self.root.mainloop()
 
     def show(self) -> None:
-        """Fenster wieder einblenden (Tray-Klick)."""
+        """Fenster wieder einblenden (Tray-Klick) – immer beim heutigen Tag."""
         self._visible = True
         try:
             self.root.deiconify()
@@ -688,7 +995,10 @@ class Dashboard:
             self.root.focus_force()
         except tk.TclError:
             return
+        self._go_today()
         self._refresh()
+        if getattr(self, "_group_tab_active", False):
+            self._group_reload()
 
     def close(self) -> None:
         """Nur ausblenden – Thread und Tk-Interpreter bleiben am Leben.
